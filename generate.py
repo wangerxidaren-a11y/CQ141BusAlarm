@@ -62,17 +62,40 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
+    }
+
+    signingConfigs {
+        create("fixed") {
+            val storePath = System.getenv("KEYSTORE_PATH")
+            if (storePath != null) {
+                storeFile = file(storePath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+                storeType = "PKCS12"
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            val fixed = signingConfigs.getByName("fixed")
+            if (fixed.storeFile != null) {
+                signingConfig = fixed
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            val fixed = signingConfigs.getByName("fixed")
+            if (fixed.storeFile != null) {
+                signingConfig = fixed
+            }
         }
     }
 
@@ -215,7 +238,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "公交强提醒助手（v1.2）\\n全天不限时 · 自由监听任意线路"
+            text = "公交强提醒助手（v1.3）\\n全天不限时 · 自由监听任意线路"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
