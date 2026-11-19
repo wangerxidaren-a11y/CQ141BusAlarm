@@ -65,8 +65,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     buildTypes {
@@ -176,7 +176,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "重庆 141 路强提醒助手\\n生效时间：工作日 06:30 - 09:30"
+            text = "重庆 141 路强提醒助手\\n生效时间：全天不限时"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 48)
@@ -531,7 +531,6 @@ object AlarmPlayer {
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import java.util.Calendar
 
 class BusNotificationListener : NotificationListenerService() {
 
@@ -549,26 +548,18 @@ class BusNotificationListener : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         sbn ?: return
         if (TARGET_PACKAGES.isNotEmpty() && sbn.packageName !in TARGET_PACKAGES) return
-        if (!isMorningCommuteWindow()) return
 
         val extras = sbn.notification.extras
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
-        val content = "$title $text".trim()
+        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString().orEmpty()
+        val content = "$title $text $bigText".trim()
 
         val now = System.currentTimeMillis()
         if (content.contains(KEYWORD) && (now - lastTriggerTime > COOLDOWN_MS)) {
             lastTriggerTime = now
             AlarmPlayer.start(this, content)
         }
-    }
-
-    private fun isMorningCommuteWindow(): Boolean {
-        val cal = Calendar.getInstance()
-        val day = cal.get(Calendar.DAY_OF_WEEK)
-        if (day == Calendar.SATURDAY || day == Calendar.SUNDAY) return false
-        val minutesOfDay = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
-        return minutesOfDay in (6 * 60 + 30)..(9 * 60 + 30)
     }
 }
 """
