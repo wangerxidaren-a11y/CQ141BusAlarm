@@ -28,11 +28,13 @@ jobs:
 
       - name: Build Debug APK
         working-directory: CQ141BusAlarm
-        run: gradle assembleDebug --no-daemon
+        run: |
+          gradle clean assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/CQ141BusAlarm-v1.1-allday.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CQ141BusAlarm-debug-apk
-          path: CQ141BusAlarm/app/build/outputs/apk/debug/app-debug.apk
+          name: CQ141BusAlarm-v1.1-allday
+          path: CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v1.1-allday.apk
           if-no-files-found: error
