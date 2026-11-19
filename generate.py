@@ -3,15 +3,12 @@ from pathlib import Path
 PROJECT_DIR = Path("CQ141BusAlarm")
 
 FILES = {
-    "README.md": """# 重庆 141 路强提醒助手（小米 17 / 安卓极简版）
+    "README.md": """# 公交强提醒助手（小米 17 / 安卓极简版）
 
 ## 功能说明
-- 监听指定公交软件（车来了、高德地图、百度地图）的通知栏消息。
-- 工作日早高峰（06:30–09:30）检测到包含关键词 `141` 时，自动：
-  1. 强制将系统闹钟音量拉满；
-  2. 通过系统闹钟通道（`USAGE_ALARM`，静音/勿扰也能响）连续语音播报“141路快到了，快出门！”（可切换为自定义 MP3）；
-  3. 持续循环震动；
-  4. 自动亮屏并弹出全屏大红关闭页面，无需解锁即可一键停止。
+- 监听指定公交软件（高德地图、车来了、百度地图）的通知栏消息。
+- 全天不限时生效，支持在 App 主界面自由输入任意线路号（多条用逗号或空格隔开，例如 `141, 465`）。
+- 检测到包含目标线路号的通知时，自动拉满系统闹钟音量、连续语音播报、循环震动并亮屏全屏弹窗。
 """,
     "settings.gradle.kts": """pluginManagement {
     repositories {
@@ -65,8 +62,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
     }
 
     buildTypes {
@@ -94,7 +91,7 @@ dependencies {
 }
 """,
     "app/src/main/res/values/strings.xml": """<resources>
-    <string name="app_name">141路强提醒</string>
+    <string name="app_name">公交强提醒</string>
 </resources>
 """,
     "app/src/main/AndroidManifest.xml": """<?xml version="1.0" encoding="utf-8"?>
@@ -141,12 +138,50 @@ dependencies {
 
 </manifest>
 """,
+    "app/src/main/java/com/erxi/cq141alarm/AlarmConfig.kt": """package com.erxi.cq141alarm
+
+import android.content.Context
+
+object AlarmConfig {
+    private const val PREFS_NAME = "bus_alarm_prefs"
+    private const val KEY_KEYWORDS = "keywords"
+    private const val KEY_LAST_LOG = "last_log"
+
+    fun getKeywordsRaw(context: Context): String {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_KEYWORDS, "141") ?: "141"
+    }
+
+    fun setKeywordsRaw(context: Context, raw: String) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_KEYWORDS, raw.trim()).apply()
+    }
+
+    fun getKeywordList(context: Context): List<String> {
+        return getKeywordsRaw(context)
+            .split(",", "，", " ", "\\n", "、")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+
+    fun getLastLog(context: Context): String {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_LAST_LOG, "暂未收到高德/车来了/百度地图通知") ?: "暂未收到高德/车来了/百度地图通知"
+    }
+
+    fun setLastLog(context: Context, log: String) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_LAST_LOG, log).apply()
+    }
+}
+""",
     "app/src/main/java/com/erxi/cq141alarm/MainActivity.kt": """package com.erxi.cq141alarm
 
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -155,7 +190,9 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
@@ -163,23 +200,52 @@ class MainActivity : Activity() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var testRunnable: Runnable? = null
+    private lateinit var logView: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         requestPostNotificationsIfNeeded()
 
+        val scroll = ScrollView(this)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(64, 64, 64, 64)
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(56, 48, 56, 48)
         }
 
         val info = TextView(this).apply {
-            text = "重庆 141 路强提醒助手\\n生效时间：全天不限时"
+            text = "公交强提醒助手（v1.2）\\n全天不限时 · 自由监听任意线路"
             textSize = 18f
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 48)
+            setPadding(0, 0, 0, 32)
+        }
+
+        val routeLabel = TextView(this).apply {
+            text = "监听线路关键词（多条用逗号或空格隔开）："
+            textSize = 14f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, 0, 0, 8)
+        }
+
+        val routeInput = EditText(this).apply {
+            setText(AlarmConfig.getKeywordsRaw(this@MainActivity))
+            hint = "例如：141, 465"
+            textSize = 16f
+        }
+
+        val btnSaveRoutes = Button(this).apply {
+            text = "保存监听线路"
+            setOnClickListener {
+                val input = routeInput.text.toString().trim()
+                if (input.isEmpty()) {
+                    Toast.makeText(this@MainActivity, "请至少输入一个线路号", Toast.LENGTH_SHORT).show()
+                } else {
+                    AlarmConfig.setKeywordsRaw(this@MainActivity, input)
+                    val list = AlarmConfig.getKeywordList(this@MainActivity).joinToString("、")
+                    Toast.makeText(this@MainActivity, "已保存监听：$list", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
 
         val btnNotifyListener = Button(this).apply {
@@ -208,12 +274,15 @@ class MainActivity : Activity() {
             setOnClickListener {
                 testRunnable?.let { handler.removeCallbacks(it) }
 
+                val firstKeyword = AlarmConfig.getKeywordList(this@MainActivity).firstOrNull() ?: "141"
+                val label = if (firstKeyword.endsWith("路")) firstKeyword else "${firstKeyword}路"
+
                 Toast.makeText(this@MainActivity, "5秒后触发，请立即按电源键锁屏测试", Toast.LENGTH_SHORT).show()
                 isEnabled = false
                 text = "倒计时 5 秒，请立即锁屏..."
 
                 val task = Runnable {
-                    AlarmPlayer.start(this@MainActivity, "【锁屏实测】重庆 141 路距您还有 2 站，请立即出门！")
+                    AlarmPlayer.start(this@MainActivity, "【锁屏实测】${label}距您还有 2 站，请立即出门！", label)
                     isEnabled = true
                     text = "3. 5秒后测试（点完请立即锁屏）"
                 }
@@ -232,12 +301,28 @@ class MainActivity : Activity() {
             }
         }
 
+        logView = TextView(this).apply {
+            textSize = 13f
+            setTextColor(Color.GRAY)
+            setPadding(0, 32, 0, 16)
+        }
+
         layout.addView(info)
+        layout.addView(routeLabel)
+        layout.addView(routeInput)
+        layout.addView(btnSaveRoutes)
         layout.addView(btnNotifyListener)
         layout.addView(btnFullScreenPerm)
         layout.addView(btnTest)
         layout.addView(btnStop)
-        setContentView(layout)
+        layout.addView(logView)
+        scroll.addView(layout)
+        setContentView(scroll)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        logView.text = "最近捕获的通知：\\n${AlarmConfig.getLastLog(this)}"
     }
 
     private fun requestPostNotificationsIfNeeded() {
@@ -277,7 +362,8 @@ class AlarmAlertActivity : Activity() {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        val busMsg = intent.getStringExtra("bus_msg") ?: "重庆 141 路快到了！"
+        val busRoute = intent.getStringExtra("bus_route") ?: "公交"
+        val busMsg = intent.getStringExtra("bus_msg") ?: "${busRoute}快到了！"
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -287,7 +373,7 @@ class AlarmAlertActivity : Activity() {
         }
 
         val title = TextView(this).apply {
-            text = "🚌 141 路快到了！"
+            text = "🚌 ${busRoute}快到了！"
             textSize = 32f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
@@ -351,14 +437,11 @@ import java.util.Locale
 object AlarmPlayer {
 
     enum class AlertMode {
-        TTS_VOICE,   // 连续语音播报
-        CUSTOM_MP3   // 循环播放 res/raw/bus_alarm.mp3
+        TTS_VOICE,
+        CUSTOM_MP3
     }
 
-    // 切换提醒方式：TTS_VOICE（语音喊话）或 CUSTOM_MP3（自定义音频）
     private val MODE = AlertMode.TTS_VOICE
-    private const val SPEECH_TEXT = "141路快到了，快出门！"
-
     private const val CHANNEL_ID = "bus_141_alarm_channel"
     private const val NOTIF_ID = 14101
 
@@ -366,28 +449,27 @@ object AlarmPlayer {
     private var mediaPlayer: MediaPlayer? = null
     private var tts: TextToSpeech? = null
     private var vibrator: Vibrator? = null
+    private var currentSpeechText: String = "公交快到了，快出门！"
 
     @Volatile var isRinging: Boolean = false
         private set
 
-    fun start(context: Context, message: String = "重庆 141 路即将到站") {
+    fun start(context: Context, message: String = "公交即将到站", routeLabel: String = "公交") {
         if (isRinging) return
         isRinging = true
+        currentSpeechText = "${routeLabel}快到了，快出门！"
 
         val appCtx = context.applicationContext
 
-        // 1. 拉满系统闹钟音量
         val audioManager = appCtx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val maxAlarmVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
         audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxAlarmVol, 0)
 
-        // 2. 按所选模式播放声音
         when (MODE) {
             AlertMode.TTS_VOICE -> startTtsLoop(appCtx)
             AlertMode.CUSTOM_MP3 -> startMp3Loop(appCtx)
         }
 
-        // 3. 持续循环震动
         vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             (appCtx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
         } else {
@@ -396,8 +478,7 @@ object AlarmPlayer {
         }
         vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 800, 300), 0))
 
-        // 4. 弹出锁屏全屏提醒界面
-        showFullScreenAlarm(appCtx, message)
+        showFullScreenAlarm(appCtx, message, routeLabel)
     }
 
     private fun startMp3Loop(appCtx: Context) {
@@ -449,13 +530,13 @@ object AlarmPlayer {
                             if (isRinging) {
                                 mainHandler.postDelayed({
                                     if (isRinging) {
-                                        tts?.speak(SPEECH_TEXT, TextToSpeech.QUEUE_FLUSH, params, "bus_141")
+                                        tts?.speak(currentSpeechText, TextToSpeech.QUEUE_FLUSH, params, "bus_alarm")
                                     }
                                 }, 600L)
                             }
                         }
                     })
-                    speak(SPEECH_TEXT, TextToSpeech.QUEUE_FLUSH, params, "bus_141")
+                    speak(currentSpeechText, TextToSpeech.QUEUE_FLUSH, params, "bus_alarm")
                 }
             } else if (isRinging) {
                 startMp3Loop(appCtx)
@@ -463,12 +544,12 @@ object AlarmPlayer {
         }
     }
 
-    private fun showFullScreenAlarm(context: Context, message: String) {
+    private fun showFullScreenAlarm(context: Context, message: String, routeLabel: String) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "141路强提醒闹钟",
+            "公交强提醒闹钟",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
@@ -479,6 +560,7 @@ object AlarmPlayer {
         val fullScreenIntent = Intent(context, AlarmAlertActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION
             putExtra("bus_msg", message)
+            putExtra("bus_route", routeLabel)
         }
         val fullScreenPendingIntent = PendingIntent.getActivity(
             context,
@@ -489,7 +571,7 @@ object AlarmPlayer {
 
         val notification = Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-            .setContentTitle("🚌 重庆 141 路快到了")
+            .setContentTitle("🚌 ${routeLabel}快到了")
             .setContentText(message)
             .setCategory(Notification.CATEGORY_ALARM)
             .setOngoing(true)
@@ -531,6 +613,9 @@ object AlarmPlayer {
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class BusNotificationListener : NotificationListenerService() {
 
@@ -540,7 +625,6 @@ class BusNotificationListener : NotificationListenerService() {
             "com.autonavi.minimap",    // 高德地图
             "com.baidu.BaiduMap"       // 百度地图
         )
-        private const val KEYWORD = "141"
         private const val COOLDOWN_MS = 3 * 60 * 1000L
         private var lastTriggerTime = 0L
     }
@@ -553,12 +637,25 @@ class BusNotificationListener : NotificationListenerService() {
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString().orEmpty()
-        val content = "$title $text $bigText".trim()
+        val content = listOf(title, text, bigText)
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString(" ")
+            .trim()
+
+        if (content.isBlank()) return
+
+        val timeStr = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
+        AlarmConfig.setLastLog(this, "[$timeStr] $content")
+
+        val keywords = AlarmConfig.getKeywordList(this)
+        val matched = keywords.firstOrNull { content.contains(it, ignoreCase = true) } ?: return
 
         val now = System.currentTimeMillis()
-        if (content.contains(KEYWORD) && (now - lastTriggerTime > COOLDOWN_MS)) {
+        if (now - lastTriggerTime > COOLDOWN_MS) {
             lastTriggerTime = now
-            AlarmPlayer.start(this, content)
+            val label = if (matched.endsWith("路")) matched else "${matched}路"
+            AlarmPlayer.start(this, content, label)
         }
     }
 }
