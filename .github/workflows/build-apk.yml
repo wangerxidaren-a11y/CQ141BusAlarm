@@ -18,18 +18,20 @@ jobs:
       - name: Generate Android project
         run: python3 generate.py
 
-      - name: Restore fixed signing key
+      - name: Derive fixed signing key
         env:
-          SIGNING_BUNDLE_B64: ${{ secrets.SIGNING_BUNDLE_B64 }}
+          SIGNING_SEED: ${{ secrets.SIGNING_SEED }}
+          SIGNING_CERT_B64: ${{ secrets.SIGNING_CERT_B64 }}
+          SIGNING_OUT_DIR: ${{ runner.temp }}/signing
         run: |
-          if [ -z "$SIGNING_BUNDLE_B64" ]; then
-            echo "::error::SIGNING_BUNDLE_B64 secret is missing; refusing to build with an ephemeral debug key"
+          if [ -z "$SIGNING_SEED" ] || [ -z "$SIGNING_CERT_B64" ]; then
+            echo "::error::SIGNING_SEED / SIGNING_CERT_B64 secrets are missing; refusing to build with an ephemeral debug key"
             exit 1
           fi
-          mkdir -p "$RUNNER_TEMP/signing"
-          echo "$SIGNING_BUNDLE_B64" | base64 -d | tar -xzf - -C "$RUNNER_TEMP/signing"
-          cat "$RUNNER_TEMP/signing/signing.env" >> "$GITHUB_ENV"
-          echo "KEYSTORE_PATH=$RUNNER_TEMP/signing/cq141-fixed.p12" >> "$GITHUB_ENV"
+          python3 -m pip install --quiet "cryptography==50.0.2" || python3 -m pip install --quiet --break-system-packages "cryptography==50.0.2"
+          python3 gen_keystore.py
+          cat "$SIGNING_OUT_DIR/signing.env" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PATH=$SIGNING_OUT_DIR/cq141-fixed.p12" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
