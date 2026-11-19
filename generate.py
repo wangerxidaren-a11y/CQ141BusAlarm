@@ -62,8 +62,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3"
+        versionCode = 5
+        versionName = "1.4"
     }
 
     signingConfigs {
@@ -169,6 +169,17 @@ object AlarmConfig {
     private const val PREFS_NAME = "bus_alarm_prefs"
     private const val KEY_KEYWORDS = "keywords"
     private const val KEY_LAST_LOG = "last_log"
+    private const val KEY_ANY_ROUTE = "any_route"
+
+    fun isAnyRoute(context: Context): Boolean {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_ANY_ROUTE, false)
+    }
+
+    fun setAnyRoute(context: Context, enabled: Boolean) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(KEY_ANY_ROUTE, enabled).apply()
+    }
 
     fun getKeywordsRaw(context: Context): String {
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -216,6 +227,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
@@ -238,7 +250,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "公交强提醒助手（v1.3）\\n全天不限时 · 自由监听任意线路"
+            text = "公交强提醒助手（v1.4）\\n全天不限时 · 自由监听任意线路"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
@@ -268,6 +280,21 @@ class MainActivity : Activity() {
                     val list = AlarmConfig.getKeywordList(this@MainActivity).joinToString("、")
                     Toast.makeText(this@MainActivity, "已保存监听：$list", Toast.LENGTH_SHORT).show()
                 }
+            }
+        }
+
+        val anyRouteSwitch = Switch(this).apply {
+            text = "任意线路模式（这三个软件来任何线路都提醒）"
+            textSize = 15f
+            isChecked = AlarmConfig.isAnyRoute(this@MainActivity)
+            setPadding(0, 24, 0, 8)
+            setOnCheckedChangeListener { _, checked ->
+                AlarmConfig.setAnyRoute(this@MainActivity, checked)
+                Toast.makeText(
+                    this@MainActivity,
+                    if (checked) "已开启任意线路模式" else "已关闭任意线路模式，按线路关键词提醒",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
 
@@ -334,6 +361,7 @@ class MainActivity : Activity() {
         layout.addView(routeLabel)
         layout.addView(routeInput)
         layout.addView(btnSaveRoutes)
+        layout.addView(anyRouteSwitch)
         layout.addView(btnNotifyListener)
         layout.addView(btnFullScreenPerm)
         layout.addView(btnTest)
@@ -671,15 +699,27 @@ class BusNotificationListener : NotificationListenerService() {
         val timeStr = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
         AlarmConfig.setLastLog(this, "[$timeStr] $content")
 
-        val keywords = AlarmConfig.getKeywordList(this)
-        val matched = keywords.firstOrNull { content.contains(it, ignoreCase = true) } ?: return
+        val label: String = if (AlarmConfig.isAnyRoute(this)) {
+            extractRouteLabel(content)
+        } else {
+            val keywords = AlarmConfig.getKeywordList(this)
+            val matched = keywords.firstOrNull { content.contains(it, ignoreCase = true) } ?: return
+            if (matched.endsWith("路")) matched else "${matched}路"
+        }
 
         val now = System.currentTimeMillis()
         if (now - lastTriggerTime > COOLDOWN_MS) {
             lastTriggerTime = now
-            val label = if (matched.endsWith("路")) matched else "${matched}路"
             AlarmPlayer.start(this, content, label)
         }
+    }
+
+    private fun extractRouteLabel(content: String): String {
+        val numRoute = Regex("(\\\\d{1,4})\\\\s*路").find(content)
+        if (numRoute != null) return "${numRoute.groupValues[1]}路"
+        val namedLine = Regex("([A-Za-z]?\\\\d{1,4}线)").find(content)
+        if (namedLine != null) return namedLine.groupValues[1]
+        return "公交"
     }
 }
 """
