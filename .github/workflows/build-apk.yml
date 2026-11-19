@@ -48,18 +48,18 @@ jobs:
         working-directory: CQ141BusAlarm
         run: |
           gradle clean assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/CQ141BusAlarm-v1.3-custom.apk
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/CQ141BusAlarm-v1.4-custom.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CQ141BusAlarm-v1.3-custom
-          path: CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v1.3-custom.apk
+          name: CQ141BusAlarm-v1.4-custom
+          path: CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v1.4-custom.apk
           if-no-files-found: error
 
       - name: Publish Release with Direct APK Link
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete v1.3 --yes || true
-          gh release create v1.3 CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v1.3-custom.apk --title "公交强提醒 v1.3（固定签名，可覆盖更新）" --notes "v1.3 起使用固定签名：从 v1.2 升级需最后一次卸载旧版重装；此后新版本可直接覆盖更新，不再重设权限。直接点击下方 CQ141BusAlarm-v1.3-custom.apk 即可下载安装，无需解压。"
+          gh release delete v1.4 --yes || true
+          gh release create v1.4 CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v1.4-custom.apk --title "公交强提醒 v1.4（新增任意线路模式）" --notes "v1.4 新增「任意线路模式」开关：打开后高德/车来了/百度地图来任何线路的到站通知都强提醒，播报自动抓通知里的线路号。固定签名，直接覆盖安装即可。直接点击下方 CQ141BusAlarm-v1.4-custom.apk 下载。"
