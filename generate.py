@@ -62,8 +62,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "2.1"
+        versionCode = 13
+        versionName = "2.2"
     }
 
     signingConfigs {
@@ -257,6 +257,7 @@ object AlarmConfig {
     private const val KEY_WATCH_END = "watch_end"
     private const val KEY_WATCH_STATUS = "watch_status"
     private const val KEY_WATCH_BOARD = "watch_board"
+    private const val KEY_WATCH_BUSES = "watch_buses"
     private const val KEY_WATCH_STATION_NAMES = "watch_station_names"
     private const val KEY_WATCH_BOOST_UNTIL = "watch_boost_until"
     private const val KEY_WATCH_FIRED = "watch_fired"
@@ -358,6 +359,13 @@ object AlarmConfig {
         wprefs(context).edit().putString(KEY_WATCH_BOARD, text).apply()
     }
 
+    fun setWatchBuses(context: Context, pairs: String) {
+        wprefs(context).edit().putString(KEY_WATCH_BUSES, pairs).apply()
+    }
+
+    fun getWatchBuses(context: Context): String =
+        wprefs(context).getString(KEY_WATCH_BUSES, "") ?: ""
+
     fun getWatchBoard(context: Context): String =
         wprefs(context).getString(KEY_WATCH_BOARD, "") ?: ""
 
@@ -453,7 +461,7 @@ class MainActivity : Activity() {
     private lateinit var leadLabel: TextView
     private lateinit var btnDirection: Button
     private lateinit var watchStatusView: TextView
-    private lateinit var boardView: TextView
+    private lateinit var boardView: BoardView
     private val uiHandler = Handler(Looper.getMainLooper())
     private val uiRefresh = object : Runnable {
         override fun run() {
@@ -469,6 +477,7 @@ class MainActivity : Activity() {
         requestPostNotificationsIfNeeded()
 
         val scroll = ScrollView(this)
+        scroll.setBackgroundColor(Color.rgb(255, 251, 242))
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -476,7 +485,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "公交强提醒助手（v2.1）\\n自查盯车 + 通知监听双保险"
+            text = "🚌 公交强提醒助手（v2.2）\\n自查盯车 + 通知监听双保险"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
@@ -681,17 +690,7 @@ class MainActivity : Activity() {
             setPadding(0, 8, 0, 8)
         }
 
-        boardView = TextView(this).apply {
-            textSize = 14f
-            setPadding(16, 16, 16, 16)
-            setTextColor(Color.DKGRAY)
-            background = GradientDrawable().apply {
-                setColor(Color.rgb(245, 245, 245))
-                setStroke(2, Color.LTGRAY)
-                cornerRadius = 8f
-            }
-            text = "车辆实时位置板：选好上车站、打开盯车开关后，这里会列出全线站点，并标出每辆车现在在哪一站。"
-        }
+        boardView = BoardView(this)
 
         layout.addView(watchTitle)
         layout.addView(lineInput)
@@ -779,8 +778,29 @@ class MainActivity : Activity() {
             watchStatusView.text = "盯车状态：" + AlarmConfig.getWatchStatus(this)
         }
         if (::boardView.isInitialized) {
-            val b = AlarmConfig.getWatchBoard(this)
-            if (b.isNotEmpty()) boardView.text = b
+            val raw = AlarmConfig.getWatchBuses(this)
+            val map = HashMap<Int, MutableList<String>>()
+            if (raw.isNotEmpty()) {
+                for (part in raw.split(";")) {
+                    val kv = part.split(":", limit = 2)
+                    val o = kv.getOrNull(0)?.toIntOrNull() ?: continue
+                    val id = kv.getOrNull(1) ?: continue
+                    map.getOrPut(o) { mutableListOf() }.add(id)
+                }
+            }
+            val names = AlarmConfig.getWatchStationNames(this)
+            val title = if (names.isEmpty()) {
+                "🚌 车辆实时位置"
+            } else {
+                AlarmConfig.getWatchLineNo(this) + "路 · " + AlarmConfig.getWatchDirDesc(this)
+            }
+            boardView.setData(
+                names,
+                AlarmConfig.getWatchTargetOrder(this),
+                map,
+                title,
+                AlarmConfig.getWatchStatus(this)
+            )
         }
     }
 
@@ -1230,6 +1250,163 @@ object ChelaileApi {
         )
 }
 """,
+    "app/src/main/java/com/erxi/cq141alarm/BoardView.kt": """package com.erxi.cq141alarm
+
+import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
+import android.view.View
+
+class BoardView(context: Context) : View(context) {
+
+    private var stationNames: List<String> = emptyList()
+    private var targetOrder: Int = -1
+    private var buses: Map<Int, List<String>> = emptyMap()
+    private var titleText: String = "🚌 车辆实时位置"
+    private var subText: String = ""
+
+    private val density = resources.displayMetrics.density
+    private fun dp(v: Float): Float = v * density
+
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 246, 233) }
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(240, 221, 190); style = Paint.Style.STROKE; strokeWidth = 1.5f * density
+    }
+    private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(245, 201, 123); strokeWidth = 4f * density; strokeCap = Paint.Cap.ROUND
+    }
+    private val dotFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val dotStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(240, 164, 90); style = Paint.Style.STROKE; strokeWidth = 2f * density
+    }
+    private val targetPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 107, 74) }
+    private val namePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(74, 63, 53); textSize = 14f * density
+    }
+    private val nameBoldPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(255, 107, 74); textSize = 14.5f * density; isFakeBoldText = true
+    }
+    private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(61, 49, 41); textSize = 16f * density; isFakeBoldText = true
+    }
+    private val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(160, 139, 122); textSize = 12f * density
+    }
+    private val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 122, 69) }
+    private val pillPastPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(178, 190, 201) }
+    private val pillTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE; textSize = 12f * density; isFakeBoldText = true
+    }
+    private val tagTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE; textSize = 11f * density; isFakeBoldText = true
+    }
+    private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(140, 120, 100); textSize = 13.5f * density
+    }
+
+    fun setData(names: List<String>, target: Int, busMap: Map<Int, List<String>>, title: String, sub: String) {
+        stationNames = names
+        targetOrder = target
+        buses = busMap
+        titleText = title
+        subText = sub
+        requestLayout()
+        invalidate()
+    }
+
+    private fun rowHeight(order: Int): Float {
+        val c = buses[order]?.size ?: 0
+        return dp(38f) + if (c > 1) dp(28f) * (c - 1) else 0f
+    }
+
+    private fun contentHeight(): Float {
+        var h = dp(16f) + dp(24f) + dp(20f) + dp(10f)
+        if (stationNames.isEmpty()) {
+            h += dp(66f)
+        } else {
+            for (i in stationNames.indices) h += rowHeight(i + 1)
+        }
+        return h + dp(14f)
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val w = MeasureSpec.getSize(widthMeasureSpec)
+        setMeasuredDimension(w, contentHeight().toInt())
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val rect = RectF(dp(1f), dp(1f), w - dp(1f), h - dp(1f))
+        canvas.drawRoundRect(rect, dp(16f), dp(16f), bgPaint)
+        canvas.drawRoundRect(rect, dp(16f), dp(16f), borderPaint)
+
+        val padX = dp(18f)
+        canvas.drawText(titleText, padX, dp(16f) + dp(17f), titlePaint)
+        if (subText.isNotEmpty()) {
+            canvas.drawText(subText, padX, dp(16f) + dp(24f) + dp(15f), subPaint)
+        }
+        var y = dp(16f) + dp(24f) + dp(20f) + dp(10f)
+        if (stationNames.isEmpty()) {
+            canvas.drawText("先点上面的「上车站」选好站，再打开盯车开关，", padX, y + dp(20f), hintPaint)
+            canvas.drawText("就能看到每辆车跑到哪一站啦 🚌", padX, y + dp(44f), hintPaint)
+            return
+        }
+        val trackX = padX + dp(10f)
+        var firstCenter = -1f
+        var lastCenter = -1f
+        var yy = y
+        for (i in stationNames.indices) {
+            val c = yy + rowHeight(i + 1) / 2f
+            if (firstCenter < 0) firstCenter = c
+            lastCenter = c
+            yy += rowHeight(i + 1)
+        }
+        canvas.drawLine(trackX, firstCenter, trackX, lastCenter, trackPaint)
+        for (i in stationNames.indices) {
+            val ord = i + 1
+            val rh = rowHeight(ord)
+            val cy = y + rh / 2f
+            val isTarget = ord == targetOrder
+            if (isTarget) {
+                canvas.drawCircle(trackX, cy, dp(9f), targetPaint)
+                canvas.drawCircle(trackX, cy, dp(9f), dotStroke)
+            } else {
+                canvas.drawCircle(trackX, cy, dp(6f), dotFill)
+                canvas.drawCircle(trackX, cy, dp(6f), dotStroke)
+            }
+            val nameX = trackX + dp(20f)
+            val paint = if (isTarget) nameBoldPaint else namePaint
+            val baseline = cy - (paint.fontMetrics.ascent + paint.fontMetrics.descent) / 2f
+            canvas.drawText(stationNames[i], nameX, baseline, paint)
+            if (isTarget) {
+                val tag = "你在这上车"
+                val tw = tagTextPaint.measureText(tag)
+                val tx = nameX + paint.measureText(stationNames[i]) + dp(8f)
+                val tagRect = RectF(tx, cy - dp(10f), tx + tw + dp(14f), cy + dp(10f))
+                canvas.drawRoundRect(tagRect, dp(10f), dp(10f), targetPaint)
+                canvas.drawText(tag, tx + dp(7f), cy - (tagTextPaint.fontMetrics.ascent + tagTextPaint.fontMetrics.descent) / 2f, tagTextPaint)
+            }
+            val list = buses[ord] ?: emptyList()
+            var py = cy - (list.size * dp(26f) - dp(2f)) / 2f
+            for (id in list) {
+                val label = "🚌 " + id
+                val tw = pillTextPaint.measureText(label)
+                val pw = tw + dp(16f)
+                val px = w - padX - pw
+                val pillRect = RectF(px, py, px + pw, py + dp(24f))
+                canvas.drawRoundRect(pillRect, dp(12f), dp(12f), if (ord <= targetOrder) pillPaint else pillPastPaint)
+                canvas.drawText(label, px + dp(8f), py + dp(12f) - (pillTextPaint.fontMetrics.ascent + pillTextPaint.fontMetrics.descent) / 2f, pillTextPaint)
+                py += dp(26f)
+            }
+            y += rh
+        }
+    }
+}
+""",
     "app/src/main/java/com/erxi/cq141alarm/WatchService.kt": """package com.erxi.cq141alarm
 
 import android.app.Notification
@@ -1336,37 +1513,19 @@ class WatchService : Service() {
                         }
                     }
                 }
-                // 实时位置板：把每辆车标到它当前所在站上
-                val names = AlarmConfig.getWatchStationNames(ctx)
-                val byOrder = HashMap<Int, MutableList<String>>()
+                // 实时位置板数据：order:busId;order:busId（BoardView 据此绘制）
+                val pairs = StringBuilder()
                 if (buses != null) {
                     for (i in 0 until buses.length()) {
                         val b = buses.getJSONObject(i)
                         val o = b.optInt("order", -1)
                         if (o > 0) {
-                            byOrder.getOrPut(o) { mutableListOf() }.add(b.optString("busId", ""))
+                            if (pairs.isNotEmpty()) pairs.append(";")
+                            pairs.append(o).append(":").append(b.optString("busId", ""))
                         }
                     }
                 }
-                val board = StringBuilder()
-                board.append(AlarmConfig.getWatchLineNo(ctx)).append("路 · ")
-                    .append(AlarmConfig.getWatchDirDesc(ctx)).append("\n")
-                board.append("—— 车辆实时位置（每 30 秒刷新） ——")
-                if (names.isNotEmpty()) {
-                    for (i in names.indices) {
-                        val ord = i + 1
-                        board.append("\n").append(ord).append(". ").append(names[i])
-                        if (ord == target) board.append("（你在这上车）")
-                        byOrder[ord]?.forEach { id -> board.append("  [车 ").append(id).append("]") }
-                    }
-                } else {
-                    for (ord in byOrder.keys.sorted()) {
-                        for (id in byOrder[ord] ?: emptyList()) {
-                            board.append("\n[车 ").append(id).append("] 在第 ").append(ord).append(" 站")
-                        }
-                    }
-                }
-                AlarmConfig.setWatchBoard(ctx, board.toString())
+                AlarmConfig.setWatchBuses(ctx, pairs.toString())
                 if (nearestOrder < 0) {
                     AlarmConfig.setWatchStatus(
                         ctx,
