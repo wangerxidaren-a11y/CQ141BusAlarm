@@ -62,8 +62,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.5"
+        versionCode = 7
+        versionName = "1.6"
     }
 
     signingConfigs {
@@ -123,6 +123,7 @@ dependencies {
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:allowBackup="true"
@@ -266,7 +267,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "公交强提醒助手（v1.5）\\n全天不限时 · 自由监听任意线路"
+            text = "公交强提醒助手（v1.6）\\n全天不限时 · 自由监听任意线路"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
@@ -335,8 +336,18 @@ class MainActivity : Activity() {
             }
         }
 
+        val btnOverlayPerm = Button(this).apply {
+            text = "3. 开启悬浮窗权限（亮屏玩手机时全屏霸屏）"
+            setOnClickListener {
+                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            }
+        }
+
         val btnTest = Button(this).apply {
-            text = "3. 5秒后测试（点完请立即锁屏）"
+            text = "4. 5秒后测试（点完请立即锁屏）"
             setOnClickListener {
                 testRunnable?.let { handler.removeCallbacks(it) }
 
@@ -350,7 +361,7 @@ class MainActivity : Activity() {
                 val task = Runnable {
                     AlarmPlayer.start(this@MainActivity, "【锁屏实测】${label}距您还有 2 站，请立即出门！", label)
                     isEnabled = true
-                    text = "3. 5秒后测试（点完请立即锁屏）"
+                    text = "4. 5秒后测试（点完请立即锁屏）"
                 }
                 testRunnable = task
                 handler.postDelayed(task, 5000L)
@@ -358,11 +369,11 @@ class MainActivity : Activity() {
         }
 
         val btnStop = Button(this).apply {
-            text = "4. 我出门了（停止响铃 / 取消测试）"
+            text = "5. 我出门了（停止响铃 / 取消测试）"
             setOnClickListener {
                 testRunnable?.let { handler.removeCallbacks(it) }
                 btnTest.isEnabled = true
-                btnTest.text = "3. 5秒后测试（点完请立即锁屏）"
+                btnTest.text = "4. 5秒后测试（点完请立即锁屏）"
                 AlarmPlayer.stop(this@MainActivity)
             }
         }
@@ -386,6 +397,7 @@ class MainActivity : Activity() {
         layout.addView(anyRouteSwitch)
         layout.addView(btnNotifyListener)
         layout.addView(btnFullScreenPerm)
+        layout.addView(btnOverlayPerm)
         layout.addView(btnTest)
         layout.addView(btnStop)
         layout.addView(statusView)
@@ -494,6 +506,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.PixelFormat
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
@@ -505,8 +519,15 @@ import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
 import java.util.Locale
 
 object AlarmPlayer {
@@ -524,6 +545,7 @@ object AlarmPlayer {
     private var mediaPlayer: MediaPlayer? = null
     private var tts: TextToSpeech? = null
     private var vibrator: Vibrator? = null
+    private var overlayView: View? = null
     private var currentSpeechText: String = "公交快到了，快出门！"
 
     @Volatile var isRinging: Boolean = false
@@ -554,6 +576,65 @@ object AlarmPlayer {
         vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 800, 300), 0))
 
         showFullScreenAlarm(appCtx, message, routeLabel)
+        showOverlay(appCtx, message, routeLabel)
+    }
+
+    private fun showOverlay(appCtx: Context, message: String, routeLabel: String) {
+        if (!Settings.canDrawOverlays(appCtx)) return
+        mainHandler.post {
+            if (!isRinging || overlayView != null) return@post
+            try {
+                val wm = appCtx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+                val root = LinearLayout(appCtx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER
+                    setBackgroundColor(Color.parseColor("#B71C1C"))
+                    setPadding(64, 64, 64, 64)
+                }
+
+                val title = TextView(appCtx).apply {
+                    text = "🚌 ${routeLabel}快到了！"
+                    textSize = 32f
+                    setTextColor(Color.WHITE)
+                    gravity = Gravity.CENTER
+                }
+
+                val detail = TextView(appCtx).apply {
+                    text = message
+                    textSize = 18f
+                    setTextColor(Color.parseColor("#FFCDD2"))
+                    gravity = Gravity.CENTER
+                    setPadding(0, 24, 0, 96)
+                }
+
+                val stopBtn = Button(appCtx).apply {
+                    text = "我出门了 · 停止响铃"
+                    textSize = 22f
+                    setTextColor(Color.parseColor("#B71C1C"))
+                    setBackgroundColor(Color.WHITE)
+                    setPadding(64, 48, 64, 48)
+                    setOnClickListener { stop(appCtx) }
+                }
+
+                root.addView(title)
+                root.addView(detail)
+                root.addView(stopBtn)
+
+                val params = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                    PixelFormat.TRANSLUCENT
+                )
+                wm.addView(root, params)
+                overlayView = root
+            } catch (e: Exception) {
+                // 悬浮窗失败就靠全屏通知兜底，不让异常打断响铃
+            }
+        }
     }
 
     private fun startMp3Loop(appCtx: Context) {
@@ -659,7 +740,19 @@ object AlarmPlayer {
 
     fun stop(context: Context? = null) {
         isRinging = false
+        val capturedOverlay = overlayView
+        overlayView = null
         mainHandler.removeCallbacksAndMessages(null)
+        if (capturedOverlay != null) {
+            mainHandler.post {
+                try {
+                    val wm = capturedOverlay.context
+                        .getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                    wm.removeView(capturedOverlay)
+                } catch (e: Exception) {
+                }
+            }
+        }
 
         mediaPlayer?.apply {
             if (isPlaying) stop()
