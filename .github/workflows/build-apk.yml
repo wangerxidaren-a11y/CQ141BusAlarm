@@ -48,18 +48,18 @@ jobs:
         working-directory: CQ141BusAlarm
         run: |
           gradle clean assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/CQ141BusAlarm-v1.5-custom.apk
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/CQ141BusAlarm-v2.0-custom.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CQ141BusAlarm-v1.5-custom
-          path: CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v1.5-custom.apk
+          name: CQ141BusAlarm-v2.0-custom
+          path: CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v2.0-custom.apk
           if-no-files-found: error
 
       - name: Publish Release with Direct APK Link
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete v1.5 --yes || true
-          gh release create v1.5 CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v1.5-custom.apk --title "公交强提醒 v1.5（通知留痕与监听自检）" --notes "v1.5 诊断修复：通知改为先留痕再过滤（无文字的通知也会记录），新增监听连接状态显示与最近通知滚动记录。固定签名，直接覆盖安装即可。直接点击下方 CQ141BusAlarm-v1.5-custom.apk 下载。"
+          gh release delete v2.0 --yes || true
+          gh release create v2.0 CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v2.0-custom.apk --title "公交强提醒 v2.0（自查盯车）" --notes "v2.0 自查盯车：软件自己直查车来了实时数据，时段内每30秒查一次，车到站前强提醒，不再依赖高德等App发通知（通知监听保留为备用）。默认已配好141路·解放东路（道门口→北站方向）。固定签名，直接覆盖安装即可。"
