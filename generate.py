@@ -62,8 +62,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.4"
+        versionCode = 6
+        versionName = "1.5"
     }
 
     signingConfigs {
@@ -200,12 +200,27 @@ object AlarmConfig {
 
     fun getLastLog(context: Context): String {
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getString(KEY_LAST_LOG, "暂未收到高德/车来了/百度地图通知") ?: "暂未收到高德/车来了/百度地图通知"
+        val stored = prefs.getString(KEY_LAST_LOG, "") ?: ""
+        return if (stored.isBlank()) "暂未收到高德/车来了/百度地图通知" else stored
     }
 
     fun setLastLog(context: Context, log: String) {
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_LAST_LOG, log).apply()
+        val old = prefs.getString(KEY_LAST_LOG, "") ?: ""
+        val lines = (listOf(log) + old.split("\\n")).filter { it.isNotBlank() }.take(6)
+        prefs.edit().putString(KEY_LAST_LOG, lines.joinToString("\\n")).apply()
+    }
+
+    private const val KEY_LISTENER_STATUS = "listener_status"
+
+    fun getListenerStatus(context: Context): String {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_LISTENER_STATUS, "未知（还没连上过）") ?: "未知（还没连上过）"
+    }
+
+    fun setListenerStatus(context: Context, status: String) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_LISTENER_STATUS, status).apply()
     }
 }
 """,
@@ -236,6 +251,7 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private var testRunnable: Runnable? = null
     private lateinit var logView: TextView
+    private lateinit var statusView: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -250,7 +266,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "公交强提醒助手（v1.4）\\n全天不限时 · 自由监听任意线路"
+            text = "公交强提醒助手（v1.5）\\n全天不限时 · 自由监听任意线路"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
@@ -351,10 +367,16 @@ class MainActivity : Activity() {
             }
         }
 
+        statusView = TextView(this).apply {
+            textSize = 13f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, 32, 0, 4)
+        }
+
         logView = TextView(this).apply {
             textSize = 13f
             setTextColor(Color.GRAY)
-            setPadding(0, 32, 0, 16)
+            setPadding(0, 4, 0, 16)
         }
 
         layout.addView(info)
@@ -366,6 +388,7 @@ class MainActivity : Activity() {
         layout.addView(btnFullScreenPerm)
         layout.addView(btnTest)
         layout.addView(btnStop)
+        layout.addView(statusView)
         layout.addView(logView)
         scroll.addView(layout)
         setContentView(scroll)
@@ -373,6 +396,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        statusView.text = "监听状态：${AlarmConfig.getListenerStatus(this)}"
         logView.text = "最近捕获的通知：\\n${AlarmConfig.getLastLog(this)}"
     }
 
@@ -680,6 +704,18 @@ class BusNotificationListener : NotificationListenerService() {
         private var lastTriggerTime = 0L
     }
 
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        val timeStr = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
+        AlarmConfig.setListenerStatus(this, "已连接 · $timeStr")
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        val timeStr = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
+        AlarmConfig.setListenerStatus(this, "已断开 · $timeStr")
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         sbn ?: return
         if (TARGET_PACKAGES.isNotEmpty() && sbn.packageName !in TARGET_PACKAGES) return
@@ -688,16 +724,26 @@ class BusNotificationListener : NotificationListenerService() {
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString().orEmpty()
-        val content = listOf(title, text, bigText)
+        val ticker = sbn.notification.tickerText?.toString().orEmpty()
+        val content = listOf(title, text, bigText, ticker)
             .filter { it.isNotBlank() }
             .distinct()
             .joinToString(" ")
             .trim()
 
-        if (content.isBlank()) return
-
         val timeStr = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
-        AlarmConfig.setLastLog(this, "[$timeStr] $content")
+        val appName = when (sbn.packageName) {
+            "com.autonavi.minimap" -> "高德"
+            "com.chelaile.lite" -> "车来了"
+            else -> "百度"
+        }
+
+        if (content.isBlank()) {
+            AlarmConfig.setLastLog(this, "[$timeStr] $appName 发了一条通知（无文字内容，未触发）")
+            return
+        }
+
+        AlarmConfig.setLastLog(this, "[$timeStr] $appName：$content")
 
         val label: String = if (AlarmConfig.isAnyRoute(this)) {
             extractRouteLabel(content)
