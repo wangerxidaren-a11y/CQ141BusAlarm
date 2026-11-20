@@ -62,8 +62,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "2.0"
+        versionCode = 9
+        versionName = "2.0.1"
     }
 
     signingConfigs {
@@ -430,7 +430,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "公交强提醒助手（v2.0）\\n自查盯车 + 通知监听双保险"
+            text = "公交强提醒助手（v2.0.1）\\n自查盯车 + 通知监听双保险"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
@@ -633,7 +633,7 @@ class MainActivity : Activity() {
         }
 
         switchWatch = Switch(this).apply {
-            text = "自查盯车开关（时段内每 30 秒自己查一次）"
+            text = "自查盯车开关（打开就盯，每 30 秒查一次）"
             textSize = 15f
             setPadding(0, 16, 0, 16)
             isChecked = AlarmConfig.isWatchEnabled(this@MainActivity)
@@ -645,8 +645,10 @@ class MainActivity : Activity() {
                     return@setOnCheckedChangeListener
                 }
                 AlarmConfig.setWatchEnabled(this@MainActivity, true)
+                // 手动打开 = 立刻开盯，最长连盯 12 小时；时段只管每天自动恢复
+                AlarmConfig.setWatchBoostUntil(this@MainActivity, System.currentTimeMillis() + 12 * 60 * 60 * 1000L)
                 WatchService.start(this@MainActivity)
-                Toast.makeText(this@MainActivity, "自查盯车已开启", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "自查盯车已开启，立刻开始盯", Toast.LENGTH_SHORT).show()
             } else {
                 AlarmConfig.setWatchEnabled(this@MainActivity, false)
                 WatchService.stop(this@MainActivity)
@@ -689,20 +691,24 @@ class MainActivity : Activity() {
     }
 
     private fun saveWatchWindow(): Boolean {
-        fun ok(s: String): Boolean {
-            val p = s.trim().split(":")
-            if (p.size != 2) return false
-            val h = p[0].toIntOrNull() ?: return false
-            val m = p[1].toIntOrNull() ?: return false
-            return h in 0..23 && m in 0..59
+        fun parse(s: String): String? {
+            val t = s.replace("：", ":").replace(" ", "").trim()
+            val p = t.split(":")
+            if (p.size != 2) return null
+            val h = p[0].toIntOrNull() ?: return null
+            val m = p[1].toIntOrNull() ?: return null
+            if (h !in 0..23 || m !in 0..59) return null
+            return h.toString().padStart(2, '0') + ":" + m.toString().padStart(2, '0')
         }
-        val s = startInput.text.toString().trim()
-        val e = endInput.text.toString().trim()
-        if (!ok(s) || !ok(e)) {
-            Toast.makeText(this, "时段格式不对，填如 07:00", Toast.LENGTH_LONG).show()
+        val s = parse(startInput.text.toString())
+        val e = parse(endInput.text.toString())
+        if (s == null || e == null) {
+            Toast.makeText(this, "时段格式不对，填如 8:30", Toast.LENGTH_LONG).show()
             return false
         }
         AlarmConfig.saveWatchWindow(this, s, e)
+        startInput.setText(s)
+        endInput.setText(e)
         return true
     }
 
