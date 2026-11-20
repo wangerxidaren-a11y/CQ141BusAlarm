@@ -62,8 +62,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "2.0.2"
+        versionCode = 11
+        versionName = "2.0.3"
     }
 
     signingConfigs {
@@ -372,6 +372,26 @@ object AlarmConfig {
         wprefs(context).edit().putInt(KEY_WATCH_DIR_INDEX, idx).apply()
     }
 
+    fun saveWatchDirs(
+        context: Context,
+        lineId: String, lineIdAlt: String,
+        dirDesc: String, dirDescAlt: String
+    ) {
+        wprefs(context).edit()
+            .putString(KEY_WATCH_LINE_ID, lineId)
+            .putString(KEY_WATCH_LINE_ID_ALT, lineIdAlt)
+            .putString(KEY_WATCH_DIR_DESC, dirDesc)
+            .putString(KEY_WATCH_DIR_DESC_ALT, dirDescAlt)
+            .apply()
+    }
+
+    fun saveWatchStation(context: Context, stationId: String, targetOrder: Int) {
+        wprefs(context).edit()
+            .putString(KEY_WATCH_STATION_ID, stationId)
+            .putInt(KEY_WATCH_TARGET_ORDER, targetOrder)
+            .apply()
+    }
+
     fun getWatchFired(context: Context): String =
         wprefs(context).getString(KEY_WATCH_FIRED, "") ?: ""
 
@@ -384,6 +404,7 @@ object AlarmConfig {
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -409,7 +430,7 @@ class MainActivity : Activity() {
     private lateinit var logView: TextView
     private lateinit var statusView: TextView
     private lateinit var lineInput: EditText
-    private lateinit var stationInput: EditText
+    private lateinit var btnStation: Button
     private lateinit var leadLabel: TextView
     private lateinit var btnDirection: Button
     private lateinit var watchStatusView: TextView
@@ -428,7 +449,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "公交强提醒助手（v2.0.2）\\n自查盯车 + 通知监听双保险"
+            text = "公交强提醒助手（v2.0.3）\\n自查盯车 + 通知监听双保险"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
@@ -565,10 +586,9 @@ class MainActivity : Activity() {
             setSingleLine(true)
         }
 
-        stationInput = EditText(this).apply {
-            hint = "上车站名（如：解放东路）"
-            setText(AlarmConfig.getWatchStationName(this@MainActivity))
-            setSingleLine(true)
+        btnStation = Button(this).apply {
+            text = "上车站：" + AlarmConfig.getWatchStationName(this@MainActivity) + "（点此选择）"
+            setOnClickListener { pickStation() }
         }
 
         btnDirection = Button(this).apply {
@@ -576,13 +596,9 @@ class MainActivity : Activity() {
             setOnClickListener {
                 val next = if (AlarmConfig.getWatchDirIndex(this@MainActivity) == 0) 1 else 0
                 AlarmConfig.setWatchDirIndex(this@MainActivity, next)
-                resolveWatch()
+                Toast.makeText(this@MainActivity, "方向已切换，请重新选择上车站", Toast.LENGTH_SHORT).show()
+                pickStation()
             }
-        }
-
-        val btnResolve = Button(this).apply {
-            text = "查找并保存线路站点"
-            setOnClickListener { resolveWatch() }
         }
 
         leadLabel = TextView(this).apply {
@@ -640,9 +656,8 @@ class MainActivity : Activity() {
 
         layout.addView(watchTitle)
         layout.addView(lineInput)
-        layout.addView(stationInput)
+        layout.addView(btnStation)
         layout.addView(btnDirection)
-        layout.addView(btnResolve)
         layout.addView(leadRow)
         layout.addView(switchWatch)
         layout.addView(watchStatusView)
@@ -652,15 +667,13 @@ class MainActivity : Activity() {
         setContentView(scroll)
     }
 
-    private fun resolveWatch() {
+    private fun pickStation() {
         val lineNo = lineInput.text.toString().trim()
-        val stationName = stationInput.text.toString().trim()
-        if (lineNo.isEmpty() || stationName.isEmpty()) {
-            Toast.makeText(this, "先填线路号和上车站名", Toast.LENGTH_LONG).show()
+        if (lineNo.isEmpty()) {
+            Toast.makeText(this, "先填线路号", Toast.LENGTH_LONG).show()
             return
         }
-        AlarmConfig.saveWatchLineInput(this, lineNo, stationName)
-        watchStatusView.text = "盯车状态：正在查找 $lineNo 路 · $stationName …"
+        watchStatusView.text = "盯车状态：正在拉取 $lineNo 路站点列表…"
         Thread {
             try {
                 val cityId = AlarmConfig.getWatchCityId(this)
@@ -681,30 +694,40 @@ class MainActivity : Activity() {
                 val chosenDesc = dirDescs[idx]
                 val altId = dirIds.getOrNull(1 - idx) ?: chosenId
                 val altDesc = dirDescs.getOrNull(1 - idx) ?: chosenDesc
+                AlarmConfig.saveWatchDirs(this, chosenId, altId, chosenDesc, altDesc)
                 val detail = ChelaileApi.lineDetail(cityId, chosenId)
                 val stations = detail.optJSONArray("stations")
                     ?: throw IllegalStateException("线路无站点数据")
-                var stationId = ""
-                var order = -1
+                val labels = mutableListOf<String>()
+                val ids = mutableListOf<String>()
+                val orders = mutableListOf<Int>()
+                val names = mutableListOf<String>()
                 for (i in 0 until stations.length()) {
                     val st = stations.getJSONObject(i)
-                    if (st.optString("sn") == stationName) {
-                        stationId = st.optString("sId")
-                        order = st.optInt("order", -1)
-                        break
-                    }
+                    labels.add(st.optInt("order").toString() + ". " + st.optString("sn"))
+                    ids.add(st.optString("sId"))
+                    orders.add(st.optInt("order", -1))
+                    names.add(st.optString("sn"))
                 }
-                if (order < 0) throw IllegalStateException("这个方向上没找到站：" + stationName)
-                AlarmConfig.saveWatchResolved(this, chosenId, altId, chosenDesc, altDesc, stationId, order)
+                if (names.isEmpty()) throw IllegalStateException("线路无站点数据")
                 runOnUiThread {
                     btnDirection.text = "方向：" + chosenDesc + "（点此切换）"
-                    watchStatusView.text = "盯车状态：已保存 " + lineNo + "路 · " + chosenDesc +
-                        " · " + stationName + "（第 " + order + " 站）"
-                    Toast.makeText(this, "已保存，可以开盯车开关了", Toast.LENGTH_LONG).show()
+                    AlertDialog.Builder(this)
+                        .setTitle(lineNo + "路 · 选择上车站")
+                        .setItems(labels.toTypedArray()) { _, which ->
+                            AlarmConfig.saveWatchLineInput(this, lineNo, names[which])
+                            AlarmConfig.saveWatchStation(this, ids[which], orders[which])
+                            btnStation.text = "上车站：" + names[which] + "（点此重选）"
+                            watchStatusView.text = "盯车状态：已保存 " + lineNo + "路 · " + chosenDesc +
+                                " · " + names[which] + "（第 " + orders[which] + " 站）"
+                            Toast.makeText(this, "已保存，可以开盯车开关了", Toast.LENGTH_LONG).show()
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
                 }
             } catch (e: Exception) {
                 runOnUiThread {
-                    watchStatusView.text = "盯车状态：查找失败：" + (e.message ?: "未知错误")
+                    watchStatusView.text = "盯车状态：拉取站点失败：" + (e.message ?: "未知错误")
                 }
             }
         }.start()
