@@ -62,8 +62,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "2.0.3"
+        versionCode = 12
+        versionName = "2.1"
     }
 
     signingConfigs {
@@ -256,6 +256,8 @@ object AlarmConfig {
     private const val KEY_WATCH_START = "watch_start"
     private const val KEY_WATCH_END = "watch_end"
     private const val KEY_WATCH_STATUS = "watch_status"
+    private const val KEY_WATCH_BOARD = "watch_board"
+    private const val KEY_WATCH_STATION_NAMES = "watch_station_names"
     private const val KEY_WATCH_BOOST_UNTIL = "watch_boost_until"
     private const val KEY_WATCH_FIRED = "watch_fired"
 
@@ -352,6 +354,22 @@ object AlarmConfig {
     fun getWatchStatus(context: Context): String =
         wprefs(context).getString(KEY_WATCH_STATUS, "尚未开始盯车") ?: "尚未开始盯车"
 
+    fun setWatchBoard(context: Context, text: String) {
+        wprefs(context).edit().putString(KEY_WATCH_BOARD, text).apply()
+    }
+
+    fun getWatchBoard(context: Context): String =
+        wprefs(context).getString(KEY_WATCH_BOARD, "") ?: ""
+
+    fun saveWatchStationNames(context: Context, namesJoined: String) {
+        wprefs(context).edit().putString(KEY_WATCH_STATION_NAMES, namesJoined).apply()
+    }
+
+    fun getWatchStationNames(context: Context): List<String> {
+        val s = wprefs(context).getString(KEY_WATCH_STATION_NAMES, "") ?: ""
+        return if (s.isEmpty()) emptyList() else s.split("|")
+    }
+
     fun setWatchStatus(context: Context, status: String) {
         wprefs(context).edit().putString(KEY_WATCH_STATUS, status).apply()
     }
@@ -406,6 +424,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.drawable.GradientDrawable
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
@@ -434,6 +453,14 @@ class MainActivity : Activity() {
     private lateinit var leadLabel: TextView
     private lateinit var btnDirection: Button
     private lateinit var watchStatusView: TextView
+    private lateinit var boardView: TextView
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val uiRefresh = object : Runnable {
+        override fun run() {
+            refreshWatchTexts()
+            uiHandler.postDelayed(this, 5000)
+        }
+    }
     private lateinit var switchWatch: Switch
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -449,7 +476,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "公交强提醒助手（v2.0.3）\\n自查盯车 + 通知监听双保险"
+            text = "公交强提醒助手（v2.1）\\n自查盯车 + 通知监听双保险"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
@@ -651,7 +678,19 @@ class MainActivity : Activity() {
         watchStatusView = TextView(this).apply {
             textSize = 13f
             setTextColor(Color.DKGRAY)
-            setPadding(0, 8, 0, 16)
+            setPadding(0, 8, 0, 8)
+        }
+
+        boardView = TextView(this).apply {
+            textSize = 14f
+            setPadding(16, 16, 16, 16)
+            setTextColor(Color.DKGRAY)
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(245, 245, 245))
+                setStroke(2, Color.LTGRAY)
+                cornerRadius = 8f
+            }
+            text = "车辆实时位置板：选好上车站、打开盯车开关后，这里会列出全线站点，并标出每辆车现在在哪一站。"
         }
 
         layout.addView(watchTitle)
@@ -661,6 +700,7 @@ class MainActivity : Activity() {
         layout.addView(leadRow)
         layout.addView(switchWatch)
         layout.addView(watchStatusView)
+        layout.addView(boardView)
         layout.addView(statusView)
         layout.addView(logView)
         scroll.addView(layout)
@@ -710,6 +750,7 @@ class MainActivity : Activity() {
                     names.add(st.optString("sn"))
                 }
                 if (names.isEmpty()) throw IllegalStateException("线路无站点数据")
+                AlarmConfig.saveWatchStationNames(this, names.joinToString("|"))
                 runOnUiThread {
                     btnDirection.text = "方向：" + chosenDesc + "（点此切换）"
                     AlertDialog.Builder(this)
@@ -733,13 +774,28 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    private fun refreshWatchTexts() {
+        if (::watchStatusView.isInitialized) {
+            watchStatusView.text = "盯车状态：" + AlarmConfig.getWatchStatus(this)
+        }
+        if (::boardView.isInitialized) {
+            val b = AlarmConfig.getWatchBoard(this)
+            if (b.isNotEmpty()) boardView.text = b
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         statusView.text = "监听状态：${AlarmConfig.getListenerStatus(this)}"
         logView.text = "最近捕获的通知：\\n${AlarmConfig.getLastLog(this)}"
-        if (::watchStatusView.isInitialized) {
-            watchStatusView.text = "盯车状态：" + AlarmConfig.getWatchStatus(this)
-        }
+        refreshWatchTexts()
+        uiHandler.removeCallbacks(uiRefresh)
+        uiHandler.postDelayed(uiRefresh, 5000)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        uiHandler.removeCallbacks(uiRefresh)
     }
 
     private fun requestPostNotificationsIfNeeded() {
@@ -1280,6 +1336,37 @@ class WatchService : Service() {
                         }
                     }
                 }
+                // 实时位置板：把每辆车标到它当前所在站上
+                val names = AlarmConfig.getWatchStationNames(ctx)
+                val byOrder = HashMap<Int, MutableList<String>>()
+                if (buses != null) {
+                    for (i in 0 until buses.length()) {
+                        val b = buses.getJSONObject(i)
+                        val o = b.optInt("order", -1)
+                        if (o > 0) {
+                            byOrder.getOrPut(o) { mutableListOf() }.add(b.optString("busId", ""))
+                        }
+                    }
+                }
+                val board = StringBuilder()
+                board.append(AlarmConfig.getWatchLineNo(ctx)).append("路 · ")
+                    .append(AlarmConfig.getWatchDirDesc(ctx)).append("\n")
+                board.append("—— 车辆实时位置（每 30 秒刷新） ——")
+                if (names.isNotEmpty()) {
+                    for (i in names.indices) {
+                        val ord = i + 1
+                        board.append("\n").append(ord).append(". ").append(names[i])
+                        if (ord == target) board.append("（你在这上车）")
+                        byOrder[ord]?.forEach { id -> board.append("  [车 ").append(id).append("]") }
+                    }
+                } else {
+                    for (ord in byOrder.keys.sorted()) {
+                        for (id in byOrder[ord] ?: emptyList()) {
+                            board.append("\n[车 ").append(id).append("] 在第 ").append(ord).append(" 站")
+                        }
+                    }
+                }
+                AlarmConfig.setWatchBoard(ctx, board.toString())
                 if (nearestOrder < 0) {
                     AlarmConfig.setWatchStatus(
                         ctx,
