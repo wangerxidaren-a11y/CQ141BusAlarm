@@ -62,8 +62,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "2.0.1"
+        versionCode = 10
+        versionName = "2.0.2"
     }
 
     signingConfigs {
@@ -410,8 +410,6 @@ class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var lineInput: EditText
     private lateinit var stationInput: EditText
-    private lateinit var startInput: EditText
-    private lateinit var endInput: EditText
     private lateinit var leadLabel: TextView
     private lateinit var btnDirection: Button
     private lateinit var watchStatusView: TextView
@@ -430,7 +428,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "公交强提醒助手（v2.0.1）\\n自查盯车 + 通知监听双保险"
+            text = "公交强提醒助手（v2.0.2）\\n自查盯车 + 通知监听双保险"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
@@ -616,55 +614,21 @@ class MainActivity : Activity() {
             addView(btnLeadPlus)
         }
 
-        startInput = EditText(this).apply {
-            hint = "开始 07:00"
-            setText(AlarmConfig.getWatchStart(this@MainActivity))
-            setSingleLine(true)
-        }
-        endInput = EditText(this).apply {
-            hint = "结束 09:00"
-            setText(AlarmConfig.getWatchEnd(this@MainActivity))
-            setSingleLine(true)
-        }
-        val windowRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(startInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(endInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        }
-
         switchWatch = Switch(this).apply {
-            text = "自查盯车开关（打开就盯，每 30 秒查一次）"
+            text = "自查盯车开关（打开就盯，关了才停）"
             textSize = 15f
             setPadding(0, 16, 0, 16)
             isChecked = AlarmConfig.isWatchEnabled(this@MainActivity)
         }
         switchWatch.setOnCheckedChangeListener { _, checked ->
             if (checked) {
-                if (!saveWatchWindow()) {
-                    AlarmConfig.setWatchEnabled(this@MainActivity, false)
-                    return@setOnCheckedChangeListener
-                }
                 AlarmConfig.setWatchEnabled(this@MainActivity, true)
-                // 手动打开 = 立刻开盯，最长连盯 12 小时；时段只管每天自动恢复
-                AlarmConfig.setWatchBoostUntil(this@MainActivity, System.currentTimeMillis() + 12 * 60 * 60 * 1000L)
                 WatchService.start(this@MainActivity)
                 Toast.makeText(this@MainActivity, "自查盯车已开启，立刻开始盯", Toast.LENGTH_SHORT).show()
             } else {
                 AlarmConfig.setWatchEnabled(this@MainActivity, false)
                 WatchService.stop(this@MainActivity)
                 Toast.makeText(this@MainActivity, "自查盯车已关闭", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        val btnBoost = Button(this).apply {
-            text = "立即盯车 45 分钟（测试用）"
-            setOnClickListener {
-                if (!saveWatchWindow()) return@setOnClickListener
-                AlarmConfig.setWatchEnabled(this@MainActivity, true)
-                switchWatch.isChecked = true
-                AlarmConfig.setWatchBoostUntil(this@MainActivity, System.currentTimeMillis() + 45 * 60 * 1000L)
-                WatchService.start(this@MainActivity)
-                Toast.makeText(this@MainActivity, "开始盯车 45 分钟，下拉看盯车状态", Toast.LENGTH_LONG).show()
             }
         }
 
@@ -680,36 +644,12 @@ class MainActivity : Activity() {
         layout.addView(btnDirection)
         layout.addView(btnResolve)
         layout.addView(leadRow)
-        layout.addView(windowRow)
         layout.addView(switchWatch)
-        layout.addView(btnBoost)
         layout.addView(watchStatusView)
         layout.addView(statusView)
         layout.addView(logView)
         scroll.addView(layout)
         setContentView(scroll)
-    }
-
-    private fun saveWatchWindow(): Boolean {
-        fun parse(s: String): String? {
-            val t = s.replace("：", ":").replace(" ", "").trim()
-            val p = t.split(":")
-            if (p.size != 2) return null
-            val h = p[0].toIntOrNull() ?: return null
-            val m = p[1].toIntOrNull() ?: return null
-            if (h !in 0..23 || m !in 0..59) return null
-            return h.toString().padStart(2, '0') + ":" + m.toString().padStart(2, '0')
-        }
-        val s = parse(startInput.text.toString())
-        val e = parse(endInput.text.toString())
-        if (s == null || e == null) {
-            Toast.makeText(this, "时段格式不对，填如 8:30", Toast.LENGTH_LONG).show()
-            return false
-        }
-        AlarmConfig.saveWatchWindow(this, s, e)
-        startInput.setText(s)
-        endInput.setText(e)
-        return true
     }
 
     private fun resolveWatch() {
@@ -1242,16 +1182,7 @@ class WatchService : Service() {
                 stopSelf()
                 return
             }
-            val boosted = System.currentTimeMillis() < AlarmConfig.getWatchBoostUntil(this@WatchService)
-            if (boosted || inWindow()) {
-                poll()
-            } else {
-                AlarmConfig.setWatchStatus(
-                    this@WatchService,
-                    "不在盯车时段（" + AlarmConfig.getWatchStart(this@WatchService) + "–" +
-                        AlarmConfig.getWatchEnd(this@WatchService) + "），待机中"
-                )
-            }
+            poll()
             handler.postDelayed(this, 30000)
         }
     }
@@ -1289,19 +1220,6 @@ class WatchService : Service() {
         running = false
         handler.removeCallbacks(tick)
         super.onDestroy()
-    }
-
-    private fun inWindow(): Boolean {
-        fun parse(s: String): Int {
-            val parts = s.split(":")
-            return (parts.getOrNull(0)?.toIntOrNull() ?: 0) * 60 +
-                (parts.getOrNull(1)?.toIntOrNull() ?: 0)
-        }
-        val now = Calendar.getInstance()
-        val cur = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
-        val start = parse(AlarmConfig.getWatchStart(this))
-        val end = parse(AlarmConfig.getWatchEnd(this))
-        return if (end > start) cur in start until end else cur >= start || cur < end
     }
 
     private fun poll() {
