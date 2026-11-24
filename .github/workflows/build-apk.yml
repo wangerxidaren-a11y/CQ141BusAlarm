@@ -48,18 +48,18 @@ jobs:
         working-directory: CQ141BusAlarm
         run: |
           gradle clean assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/CQ141BusAlarm-v2.2-custom.apk
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/CQ141BusAlarm-v2.3-custom.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CQ141BusAlarm-v2.2-custom
-          path: CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v2.2-custom.apk
+          name: CQ141BusAlarm-v2.3-custom
+          path: CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v2.3-custom.apk
           if-no-files-found: error
 
       - name: Publish Release with Direct APK Link
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete v2.2 --yes || true
-          gh release create v2.2 CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v2.2-custom.apk --title "公交强提醒 v2.2（可爱实时位置板）" --notes "v2.2：实时位置板换成可爱站牌风——奶油色圆角卡、橙色轨道点、你的站有珊瑚红标记，每辆车是小药丸标贴在它所在站旁（橙色=正在开来，灰色=已开过），每30秒刷新。含 v2.0.3 全部改动（无时段、站名点选）。固定签名，直接覆盖安装即可。"
+          gh release delete v2.3 --yes || true
+          gh release create v2.3 CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v2.3-custom.apk --title "公交强提醒 v2.3（双目标同盯）" --notes "v2.3：自查盯车可同时盯 2 个目标（两条线路、两个站），各报各的，提醒会报出线路和站名；实时位置板可在两个目标间切换查看。含 v2.2 全部功能。固定签名，直接覆盖安装即可。"
