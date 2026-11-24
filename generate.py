@@ -6,7 +6,8 @@ FILES = {
     "README.md": """# 公交强提醒助手（小米 17 / 安卓极简版）
 
 ## 功能说明
-- 监听指定公交软件（高德地图、车来了、百度地图）的通知栏消息。
+- 自查盯车（v2.0 起）：软件自己直查车来了实时数据，每 30 秒查一次，车到站前强提醒；v2.3 起可同时盯 2 个目标（两条线路、两个站），各报各的。
+- 监听指定公交软件（高德地图、车来了、百度地图）的通知栏消息，作为备用提醒通道。
 - 全天不限时生效，支持在 App 主界面自由输入任意线路号（多条用逗号或空格隔开，例如 `141, 465`）。
 - 检测到包含目标线路号的通知时，自动拉满系统闹钟音量、连续语音播报、循环震动并亮屏全屏弹窗。
 """,
@@ -62,8 +63,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "2.2"
+        versionCode = 14
+        versionName = "2.3"
     }
 
     signingConfigs {
@@ -241,6 +242,7 @@ object AlarmConfig {
     }
 
     // ===== v2.0 自查盯车配置（默认值为 141 路 · 解放东路，开箱即用） =====
+    // v2.3 双目标同盯：目标 1 沿用原有键名（老用户配置无缝保留），目标 2 的键名加 _2 后缀。
 
     private const val KEY_WATCH_ENABLED = "watch_enabled"
     private const val KEY_WATCH_CITY_ID = "watch_city_id"
@@ -261,9 +263,19 @@ object AlarmConfig {
     private const val KEY_WATCH_STATION_NAMES = "watch_station_names"
     private const val KEY_WATCH_BOOST_UNTIL = "watch_boost_until"
     private const val KEY_WATCH_FIRED = "watch_fired"
+    private const val KEY_WATCH_DIR_INDEX = "watch_dir_index"
+    private const val KEY_WATCH_BOARD_SLOT = "watch_board_slot"
 
     private fun wprefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private fun skey(base: String, slot: Int): String = if (slot == 1) base else base + "_2"
+
+    private fun wstring(context: Context, base: String, slot: Int, def: String): String =
+        wprefs(context).getString(skey(base, slot), def) ?: def
+
+    private fun wint(context: Context, base: String, slot: Int, def: Int): Int =
+        wprefs(context).getInt(skey(base, slot), def)
 
     fun isWatchEnabled(context: Context): Boolean =
         wprefs(context).getBoolean(KEY_WATCH_ENABLED, false)
@@ -275,35 +287,68 @@ object AlarmConfig {
     fun getWatchCityId(context: Context): String =
         wprefs(context).getString(KEY_WATCH_CITY_ID, "003") ?: "003"
 
-    fun getWatchLineNo(context: Context): String =
-        wprefs(context).getString(KEY_WATCH_LINE_NO, "141") ?: "141"
+    fun isWatchSlotConfigured(context: Context, slot: Int): Boolean {
+        if (slot == 1) return true
+        return wstring(context, KEY_WATCH_LINE_ID, slot, "").isNotEmpty()
+    }
 
-    fun getWatchLineId(context: Context): String =
-        wprefs(context).getString(KEY_WATCH_LINE_ID, "023-141-1") ?: "023-141-1"
+    fun getWatchSlots(context: Context): List<Int> {
+        val slots = mutableListOf(1)
+        if (isWatchSlotConfigured(context, 2)) slots.add(2)
+        return slots
+    }
 
-    fun getWatchLineIdAlt(context: Context): String =
-        wprefs(context).getString(KEY_WATCH_LINE_ID_ALT, "023-141-0") ?: "023-141-0"
+    fun clearWatchSlot(context: Context, slot: Int) {
+        if (slot == 1) return
+        val e = wprefs(context).edit()
+        listOf(
+            KEY_WATCH_LINE_NO, KEY_WATCH_LINE_ID, KEY_WATCH_LINE_ID_ALT,
+            KEY_WATCH_DIR_DESC, KEY_WATCH_DIR_DESC_ALT, KEY_WATCH_STATION_NAME,
+            KEY_WATCH_STATION_ID, KEY_WATCH_TARGET_ORDER, KEY_WATCH_LEAD,
+            KEY_WATCH_STATUS, KEY_WATCH_BUSES, KEY_WATCH_STATION_NAMES,
+            KEY_WATCH_FIRED, KEY_WATCH_DIR_INDEX
+        ).forEach { e.remove(skey(it, slot)) }
+        e.apply()
+    }
 
-    fun getWatchDirDesc(context: Context): String =
-        wprefs(context).getString(KEY_WATCH_DIR_DESC, "道门口 → 重庆北站北广场") ?: "道门口 → 重庆北站北广场"
+    fun getWatchBoardSlot(context: Context): Int {
+        val slot = wprefs(context).getInt(KEY_WATCH_BOARD_SLOT, 1)
+        return if (slot == 2 && !isWatchSlotConfigured(context, 2)) 1 else slot
+    }
 
-    fun getWatchDirDescAlt(context: Context): String =
-        wprefs(context).getString(KEY_WATCH_DIR_DESC_ALT, "重庆北站北广场 → 道门口") ?: "重庆北站北广场 → 道门口"
+    fun setWatchBoardSlot(context: Context, slot: Int) {
+        wprefs(context).edit().putInt(KEY_WATCH_BOARD_SLOT, slot).apply()
+    }
 
-    fun getWatchStationName(context: Context): String =
-        wprefs(context).getString(KEY_WATCH_STATION_NAME, "解放东路") ?: "解放东路"
+    fun getWatchLineNo(context: Context, slot: Int = 1): String =
+        wstring(context, KEY_WATCH_LINE_NO, slot, if (slot == 1) "141" else "")
 
-    fun getWatchStationId(context: Context): String =
-        wprefs(context).getString(KEY_WATCH_STATION_ID, "023-7208") ?: "023-7208"
+    fun getWatchLineId(context: Context, slot: Int = 1): String =
+        wstring(context, KEY_WATCH_LINE_ID, slot, if (slot == 1) "023-141-1" else "")
 
-    fun getWatchTargetOrder(context: Context): Int =
-        wprefs(context).getInt(KEY_WATCH_TARGET_ORDER, 3)
+    fun getWatchLineIdAlt(context: Context, slot: Int = 1): String =
+        wstring(context, KEY_WATCH_LINE_ID_ALT, slot, if (slot == 1) "023-141-0" else "")
 
-    fun getWatchLead(context: Context): Int =
-        wprefs(context).getInt(KEY_WATCH_LEAD, 1)
+    fun getWatchDirDesc(context: Context, slot: Int = 1): String =
+        wstring(context, KEY_WATCH_DIR_DESC, slot, if (slot == 1) "道门口 → 重庆北站北广场" else "")
 
-    fun setWatchLead(context: Context, lead: Int) {
-        wprefs(context).edit().putInt(KEY_WATCH_LEAD, lead).apply()
+    fun getWatchDirDescAlt(context: Context, slot: Int = 1): String =
+        wstring(context, KEY_WATCH_DIR_DESC_ALT, slot, if (slot == 1) "重庆北站北广场 → 道门口" else "")
+
+    fun getWatchStationName(context: Context, slot: Int = 1): String =
+        wstring(context, KEY_WATCH_STATION_NAME, slot, if (slot == 1) "解放东路" else "")
+
+    fun getWatchStationId(context: Context, slot: Int = 1): String =
+        wstring(context, KEY_WATCH_STATION_ID, slot, if (slot == 1) "023-7208" else "")
+
+    fun getWatchTargetOrder(context: Context, slot: Int = 1): Int =
+        wint(context, KEY_WATCH_TARGET_ORDER, slot, if (slot == 1) 3 else 0)
+
+    fun getWatchLead(context: Context, slot: Int = 1): Int =
+        wint(context, KEY_WATCH_LEAD, slot, 1)
+
+    fun setWatchLead(context: Context, lead: Int, slot: Int = 1) {
+        wprefs(context).edit().putInt(skey(KEY_WATCH_LEAD, slot), lead).apply()
     }
 
     fun getWatchStart(context: Context): String =
@@ -319,10 +364,10 @@ object AlarmConfig {
             .apply()
     }
 
-    fun saveWatchLineInput(context: Context, lineNo: String, stationName: String) {
+    fun saveWatchLineInput(context: Context, lineNo: String, stationName: String, slot: Int = 1) {
         wprefs(context).edit()
-            .putString(KEY_WATCH_LINE_NO, lineNo)
-            .putString(KEY_WATCH_STATION_NAME, stationName)
+            .putString(skey(KEY_WATCH_LINE_NO, slot), lineNo)
+            .putString(skey(KEY_WATCH_STATION_NAME, slot), stationName)
             .apply()
     }
 
@@ -352,34 +397,34 @@ object AlarmConfig {
         e.apply()
     }
 
-    fun getWatchStatus(context: Context): String =
-        wprefs(context).getString(KEY_WATCH_STATUS, "尚未开始盯车") ?: "尚未开始盯车"
+    fun getWatchStatus(context: Context, slot: Int = 1): String =
+        wstring(context, KEY_WATCH_STATUS, slot, "尚未开始盯车")
+
+    fun setWatchStatus(context: Context, status: String, slot: Int = 1) {
+        wprefs(context).edit().putString(skey(KEY_WATCH_STATUS, slot), status).apply()
+    }
 
     fun setWatchBoard(context: Context, text: String) {
         wprefs(context).edit().putString(KEY_WATCH_BOARD, text).apply()
     }
 
-    fun setWatchBuses(context: Context, pairs: String) {
-        wprefs(context).edit().putString(KEY_WATCH_BUSES, pairs).apply()
-    }
-
-    fun getWatchBuses(context: Context): String =
-        wprefs(context).getString(KEY_WATCH_BUSES, "") ?: ""
-
     fun getWatchBoard(context: Context): String =
         wprefs(context).getString(KEY_WATCH_BOARD, "") ?: ""
 
-    fun saveWatchStationNames(context: Context, namesJoined: String) {
-        wprefs(context).edit().putString(KEY_WATCH_STATION_NAMES, namesJoined).apply()
+    fun setWatchBuses(context: Context, pairs: String, slot: Int = 1) {
+        wprefs(context).edit().putString(skey(KEY_WATCH_BUSES, slot), pairs).apply()
     }
 
-    fun getWatchStationNames(context: Context): List<String> {
-        val s = wprefs(context).getString(KEY_WATCH_STATION_NAMES, "") ?: ""
+    fun getWatchBuses(context: Context, slot: Int = 1): String =
+        wstring(context, KEY_WATCH_BUSES, slot, "")
+
+    fun saveWatchStationNames(context: Context, namesJoined: String, slot: Int = 1) {
+        wprefs(context).edit().putString(skey(KEY_WATCH_STATION_NAMES, slot), namesJoined).apply()
+    }
+
+    fun getWatchStationNames(context: Context, slot: Int = 1): List<String> {
+        val s = wstring(context, KEY_WATCH_STATION_NAMES, slot, "")
         return if (s.isEmpty()) emptyList() else s.split("|")
-    }
-
-    fun setWatchStatus(context: Context, status: String) {
-        wprefs(context).edit().putString(KEY_WATCH_STATUS, status).apply()
     }
 
     fun getWatchBoostUntil(context: Context): Long =
@@ -389,40 +434,39 @@ object AlarmConfig {
         wprefs(context).edit().putLong(KEY_WATCH_BOOST_UNTIL, until).apply()
     }
 
-    private const val KEY_WATCH_DIR_INDEX = "watch_dir_index"
+    fun getWatchDirIndex(context: Context, slot: Int = 1): Int =
+        wint(context, KEY_WATCH_DIR_INDEX, slot, 1)
 
-    fun getWatchDirIndex(context: Context): Int =
-        wprefs(context).getInt(KEY_WATCH_DIR_INDEX, 1)
-
-    fun setWatchDirIndex(context: Context, idx: Int) {
-        wprefs(context).edit().putInt(KEY_WATCH_DIR_INDEX, idx).apply()
+    fun setWatchDirIndex(context: Context, idx: Int, slot: Int = 1) {
+        wprefs(context).edit().putInt(skey(KEY_WATCH_DIR_INDEX, slot), idx).apply()
     }
 
     fun saveWatchDirs(
         context: Context,
         lineId: String, lineIdAlt: String,
-        dirDesc: String, dirDescAlt: String
+        dirDesc: String, dirDescAlt: String,
+        slot: Int = 1
     ) {
         wprefs(context).edit()
-            .putString(KEY_WATCH_LINE_ID, lineId)
-            .putString(KEY_WATCH_LINE_ID_ALT, lineIdAlt)
-            .putString(KEY_WATCH_DIR_DESC, dirDesc)
-            .putString(KEY_WATCH_DIR_DESC_ALT, dirDescAlt)
+            .putString(skey(KEY_WATCH_LINE_ID, slot), lineId)
+            .putString(skey(KEY_WATCH_LINE_ID_ALT, slot), lineIdAlt)
+            .putString(skey(KEY_WATCH_DIR_DESC, slot), dirDesc)
+            .putString(skey(KEY_WATCH_DIR_DESC_ALT, slot), dirDescAlt)
             .apply()
     }
 
-    fun saveWatchStation(context: Context, stationId: String, targetOrder: Int) {
+    fun saveWatchStation(context: Context, stationId: String, targetOrder: Int, slot: Int = 1) {
         wprefs(context).edit()
-            .putString(KEY_WATCH_STATION_ID, stationId)
-            .putInt(KEY_WATCH_TARGET_ORDER, targetOrder)
+            .putString(skey(KEY_WATCH_STATION_ID, slot), stationId)
+            .putInt(skey(KEY_WATCH_TARGET_ORDER, slot), targetOrder)
             .apply()
     }
 
-    fun getWatchFired(context: Context): String =
-        wprefs(context).getString(KEY_WATCH_FIRED, "") ?: ""
+    fun getWatchFired(context: Context, slot: Int = 1): String =
+        wstring(context, KEY_WATCH_FIRED, slot, "")
 
-    fun setWatchFired(context: Context, marker: String) {
-        wprefs(context).edit().putString(KEY_WATCH_FIRED, marker).apply()
+    fun setWatchFired(context: Context, marker: String, slot: Int = 1) {
+        wprefs(context).edit().putString(skey(KEY_WATCH_FIRED, slot), marker).apply()
     }
 }
 """,
@@ -458,8 +502,11 @@ class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var lineInput: EditText
     private lateinit var btnStation: Button
-    private lateinit var leadLabel: TextView
     private lateinit var btnDirection: Button
+    private lateinit var lineInput2: EditText
+    private lateinit var btnStation2: Button
+    private lateinit var btnDirection2: Button
+    private lateinit var btnBoardSwitch: Button
     private lateinit var watchStatusView: TextView
     private lateinit var boardView: BoardView
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -485,7 +532,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "🚌 公交强提醒助手（v2.2）\\n自查盯车 + 通知监听双保险"
+            text = "🚌 公交强提醒助手（v2.3）\\n双目标自查盯车 + 通知监听双保险"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
@@ -608,9 +655,9 @@ class MainActivity : Activity() {
         layout.addView(btnTest)
         layout.addView(btnStop)
 
-        // ===== v2.0 自查盯车 =====
+        // ===== v2.3 双目标自查盯车 =====
         val watchTitle = TextView(this).apply {
-            text = "自查盯车（软件自己查车，不依赖别的 App 通知）"
+            text = "盯车目标 1"
             textSize = 16f
             setTextColor(Color.BLACK)
             setPadding(0, 40, 0, 8)
@@ -624,7 +671,7 @@ class MainActivity : Activity() {
 
         btnStation = Button(this).apply {
             text = "上车站：" + AlarmConfig.getWatchStationName(this@MainActivity) + "（点此选择）"
-            setOnClickListener { pickStation() }
+            setOnClickListener { pickStation(1) }
         }
 
         btnDirection = Button(this).apply {
@@ -633,37 +680,59 @@ class MainActivity : Activity() {
                 val next = if (AlarmConfig.getWatchDirIndex(this@MainActivity) == 0) 1 else 0
                 AlarmConfig.setWatchDirIndex(this@MainActivity, next)
                 Toast.makeText(this@MainActivity, "方向已切换，请重新选择上车站", Toast.LENGTH_SHORT).show()
-                pickStation()
+                pickStation(1)
             }
         }
 
-        leadLabel = TextView(this).apply {
-            text = "提前 " + AlarmConfig.getWatchLead(this@MainActivity) + " 站提醒"
-            textSize = 15f
-            gravity = Gravity.CENTER
+        val watchTitle2 = TextView(this).apply {
+            text = "盯车目标 2（可选，不填就是只盯目标 1）"
+            textSize = 16f
+            setTextColor(Color.BLACK)
+            setPadding(0, 32, 0, 8)
         }
-        val btnLeadMinus = Button(this).apply {
-            text = "－"
+
+        val slot2Configured = AlarmConfig.isWatchSlotConfigured(this@MainActivity, 2)
+
+        lineInput2 = EditText(this).apply {
+            hint = "线路号（如：465）"
+            setText(if (slot2Configured) AlarmConfig.getWatchLineNo(this@MainActivity, 2) else "")
+            setSingleLine(true)
+        }
+
+        btnStation2 = Button(this).apply {
+            text = if (slot2Configured) {
+                "上车站：" + AlarmConfig.getWatchStationName(this@MainActivity, 2) + "（点此重选）"
+            } else {
+                "上车站：未设置（点此选择）"
+            }
+            setOnClickListener { pickStation(2) }
+        }
+
+        btnDirection2 = Button(this).apply {
+            text = if (slot2Configured) {
+                "方向：" + AlarmConfig.getWatchDirDesc(this@MainActivity, 2) + "（点此切换）"
+            } else {
+                "方向：未设置（选站后显示）"
+            }
             setOnClickListener {
-                val v = (AlarmConfig.getWatchLead(this@MainActivity) - 1).coerceIn(0, 5)
-                AlarmConfig.setWatchLead(this@MainActivity, v)
-                leadLabel.text = "提前 " + v + " 站提醒"
+                val next = if (AlarmConfig.getWatchDirIndex(this@MainActivity, 2) == 0) 1 else 0
+                AlarmConfig.setWatchDirIndex(this@MainActivity, next, 2)
+                Toast.makeText(this@MainActivity, "方向已切换，请重新选择上车站", Toast.LENGTH_SHORT).show()
+                pickStation(2)
             }
         }
-        val btnLeadPlus = Button(this).apply {
-            text = "＋"
+
+        val btnClearSlot2 = Button(this).apply {
+            text = "清除目标 2"
             setOnClickListener {
-                val v = (AlarmConfig.getWatchLead(this@MainActivity) + 1).coerceIn(0, 5)
-                AlarmConfig.setWatchLead(this@MainActivity, v)
-                leadLabel.text = "提前 " + v + " 站提醒"
+                AlarmConfig.clearWatchSlot(this@MainActivity, 2)
+                AlarmConfig.setWatchBoardSlot(this@MainActivity, 1)
+                lineInput2.setText("")
+                btnStation2.text = "上车站：未设置（点此选择）"
+                btnDirection2.text = "方向：未设置（选站后显示）"
+                refreshWatchTexts()
+                Toast.makeText(this@MainActivity, "已清除目标 2，只盯目标 1", Toast.LENGTH_SHORT).show()
             }
-        }
-        val leadRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(btnLeadMinus)
-            addView(leadLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(btnLeadPlus)
         }
 
         switchWatch = Switch(this).apply {
@@ -690,15 +759,32 @@ class MainActivity : Activity() {
             setPadding(0, 8, 0, 8)
         }
 
+        btnBoardSwitch = Button(this).apply {
+            setOnClickListener {
+                val slots = AlarmConfig.getWatchSlots(this@MainActivity)
+                val cur = AlarmConfig.getWatchBoardSlot(this@MainActivity)
+                val next = slots[(slots.indexOf(cur) + 1) % slots.size]
+                AlarmConfig.setWatchBoardSlot(this@MainActivity, next)
+                refreshWatchTexts()
+            }
+        }
+
         boardView = BoardView(this)
 
         layout.addView(watchTitle)
         layout.addView(lineInput)
         layout.addView(btnStation)
         layout.addView(btnDirection)
-        layout.addView(leadRow)
+        layout.addView(makeLeadRow(1))
+        layout.addView(watchTitle2)
+        layout.addView(lineInput2)
+        layout.addView(btnStation2)
+        layout.addView(btnDirection2)
+        layout.addView(makeLeadRow(2))
+        layout.addView(btnClearSlot2)
         layout.addView(switchWatch)
         layout.addView(watchStatusView)
+        layout.addView(btnBoardSwitch)
         layout.addView(boardView)
         layout.addView(statusView)
         layout.addView(logView)
@@ -706,8 +792,40 @@ class MainActivity : Activity() {
         setContentView(scroll)
     }
 
-    private fun pickStation() {
-        val lineNo = lineInput.text.toString().trim()
+    private fun makeLeadRow(slot: Int): LinearLayout {
+        val label = TextView(this).apply {
+            text = "提前 " + AlarmConfig.getWatchLead(this@MainActivity, slot) + " 站提醒"
+            textSize = 15f
+            gravity = Gravity.CENTER
+        }
+        val btnMinus = Button(this).apply {
+            text = "－"
+            setOnClickListener {
+                val v = (AlarmConfig.getWatchLead(this@MainActivity, slot) - 1).coerceIn(0, 5)
+                AlarmConfig.setWatchLead(this@MainActivity, v, slot)
+                label.text = "提前 " + v + " 站提醒"
+            }
+        }
+        val btnPlus = Button(this).apply {
+            text = "＋"
+            setOnClickListener {
+                val v = (AlarmConfig.getWatchLead(this@MainActivity, slot) + 1).coerceIn(0, 5)
+                AlarmConfig.setWatchLead(this@MainActivity, v, slot)
+                label.text = "提前 " + v + " 站提醒"
+            }
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(btnMinus)
+            addView(label, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(btnPlus)
+        }
+    }
+
+    private fun pickStation(slot: Int) {
+        val input = if (slot == 1) lineInput else lineInput2
+        val lineNo = input.text.toString().trim()
         if (lineNo.isEmpty()) {
             Toast.makeText(this, "先填线路号", Toast.LENGTH_LONG).show()
             return
@@ -728,12 +846,12 @@ class MainActivity : Activity() {
                     dirDescs.add(l.optString("startSn") + " → " + l.optString("endSn"))
                 }
                 if (dirIds.isEmpty()) throw IllegalStateException("没查到 $lineNo 路")
-                val idx = AlarmConfig.getWatchDirIndex(this).coerceIn(0, dirIds.size - 1)
+                val idx = AlarmConfig.getWatchDirIndex(this, slot).coerceIn(0, dirIds.size - 1)
                 val chosenId = dirIds[idx]
                 val chosenDesc = dirDescs[idx]
                 val altId = dirIds.getOrNull(1 - idx) ?: chosenId
                 val altDesc = dirDescs.getOrNull(1 - idx) ?: chosenDesc
-                AlarmConfig.saveWatchDirs(this, chosenId, altId, chosenDesc, altDesc)
+                AlarmConfig.saveWatchDirs(this, chosenId, altId, chosenDesc, altDesc, slot)
                 val detail = ChelaileApi.lineDetail(cityId, chosenId)
                 val stations = detail.optJSONArray("stations")
                     ?: throw IllegalStateException("线路无站点数据")
@@ -749,17 +867,20 @@ class MainActivity : Activity() {
                     names.add(st.optString("sn"))
                 }
                 if (names.isEmpty()) throw IllegalStateException("线路无站点数据")
-                AlarmConfig.saveWatchStationNames(this, names.joinToString("|"))
+                AlarmConfig.saveWatchStationNames(this, names.joinToString("|"), slot)
                 runOnUiThread {
-                    btnDirection.text = "方向：" + chosenDesc + "（点此切换）"
+                    val btnDir = if (slot == 1) btnDirection else btnDirection2
+                    val btnStn = if (slot == 1) btnStation else btnStation2
+                    btnDir.text = "方向：" + chosenDesc + "（点此切换）"
                     AlertDialog.Builder(this)
                         .setTitle(lineNo + "路 · 选择上车站")
                         .setItems(labels.toTypedArray()) { _, which ->
-                            AlarmConfig.saveWatchLineInput(this, lineNo, names[which])
-                            AlarmConfig.saveWatchStation(this, ids[which], orders[which])
-                            btnStation.text = "上车站：" + names[which] + "（点此重选）"
-                            watchStatusView.text = "盯车状态：已保存 " + lineNo + "路 · " + chosenDesc +
+                            AlarmConfig.saveWatchLineInput(this, lineNo, names[which], slot)
+                            AlarmConfig.saveWatchStation(this, ids[which], orders[which], slot)
+                            btnStn.text = "上车站：" + names[which] + "（点此重选）"
+                            watchStatusView.text = "盯车状态：已保存目标 $slot：" + lineNo + "路 · " + chosenDesc +
                                 " · " + names[which] + "（第 " + orders[which] + " 站）"
+                            refreshWatchTexts()
                             Toast.makeText(this, "已保存，可以开盯车开关了", Toast.LENGTH_LONG).show()
                         }
                         .setNegativeButton("取消", null)
@@ -775,10 +896,17 @@ class MainActivity : Activity() {
 
     private fun refreshWatchTexts() {
         if (::watchStatusView.isInitialized) {
-            watchStatusView.text = "盯车状态：" + AlarmConfig.getWatchStatus(this)
+            val slots = AlarmConfig.getWatchSlots(this)
+            val parts = slots.map { slot ->
+                "目标" + slot + "（" + AlarmConfig.getWatchLineNo(this, slot) + "路·" +
+                    AlarmConfig.getWatchStationName(this, slot) + "）：" +
+                    AlarmConfig.getWatchStatus(this, slot)
+            }
+            watchStatusView.text = "盯车状态：\\n" + parts.joinToString("\\n")
         }
         if (::boardView.isInitialized) {
-            val raw = AlarmConfig.getWatchBuses(this)
+            val slot = AlarmConfig.getWatchBoardSlot(this)
+            val raw = AlarmConfig.getWatchBuses(this, slot)
             val map = HashMap<Int, MutableList<String>>()
             if (raw.isNotEmpty()) {
                 for (part in raw.split(";")) {
@@ -788,19 +916,28 @@ class MainActivity : Activity() {
                     map.getOrPut(o) { mutableListOf() }.add(id)
                 }
             }
-            val names = AlarmConfig.getWatchStationNames(this)
+            val names = AlarmConfig.getWatchStationNames(this, slot)
             val title = if (names.isEmpty()) {
                 "🚌 车辆实时位置"
             } else {
-                AlarmConfig.getWatchLineNo(this) + "路 · " + AlarmConfig.getWatchDirDesc(this)
+                AlarmConfig.getWatchLineNo(this, slot) + "路 · " + AlarmConfig.getWatchDirDesc(this, slot)
             }
             boardView.setData(
                 names,
-                AlarmConfig.getWatchTargetOrder(this),
+                AlarmConfig.getWatchTargetOrder(this, slot),
                 map,
                 title,
-                AlarmConfig.getWatchStatus(this)
+                AlarmConfig.getWatchStatus(this, slot)
             )
+        }
+        if (::btnBoardSwitch.isInitialized) {
+            val slots = AlarmConfig.getWatchSlots(this)
+            val slot = AlarmConfig.getWatchBoardSlot(this)
+            btnBoardSwitch.text = if (slots.size > 1) {
+                "位置板：目标" + slot + "（" + AlarmConfig.getWatchLineNo(this, slot) + "路，点此切换）"
+            } else {
+                "位置板：目标1（" + AlarmConfig.getWatchLineNo(this, 1) + "路）"
+            }
         }
     }
 
@@ -1426,7 +1563,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-/** v2.0 自查盯车：时段内每 30 秒直查车来了实时数据，车到站前触发强提醒。 */
+/** v2.3 双目标自查盯车：每 30 秒直查车来了实时数据，逐个目标轮询，车到站前触发强提醒。 */
 class WatchService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
@@ -1451,9 +1588,12 @@ class WatchService : Service() {
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "盯车服务", NotificationManager.IMPORTANCE_LOW)
         )
+        val targetsText = AlarmConfig.getWatchSlots(this).joinToString(" + ") {
+            AlarmConfig.getWatchLineNo(this, it) + "路·" + AlarmConfig.getWatchStationName(this, it)
+        }
         val notif = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("公交强提醒 · 盯车中")
-            .setContentText(AlarmConfig.getWatchLineNo(this) + "路 · " + AlarmConfig.getWatchStationName(this) + "（自查实时数据）")
+            .setContentText(targetsText + "（自查实时数据）")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setOngoing(true)
             .build()
@@ -1482,79 +1622,88 @@ class WatchService : Service() {
         Thread {
             val ctx = this@WatchService
             val timeStr = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
-            try {
-                val data = ChelaileApi.busDetail(
-                    AlarmConfig.getWatchCityId(ctx),
-                    AlarmConfig.getWatchLineId(ctx),
-                    AlarmConfig.getWatchTargetOrder(ctx),
-                    AlarmConfig.getWatchStationId(ctx)
-                )
-                val buses = data.optJSONArray("buses")
-                val target = AlarmConfig.getWatchTargetOrder(ctx)
-                var nearestOrder = -1
-                var nearestBusId = ""
-                var nearestTravelSec = -1
-                var total = 0
-                if (buses != null) {
-                    total = buses.length()
-                    for (i in 0 until buses.length()) {
-                        val b = buses.getJSONObject(i)
-                        if (b.optInt("distanceToWaitStn", -1) < 0) continue
-                        val order = b.optInt("order", -1)
-                        if (order > nearestOrder) {
-                            nearestOrder = order
-                            nearestBusId = b.optString("busId", "")
-                            val travels = b.optJSONArray("travels")
-                            nearestTravelSec = if (travels != null && travels.length() > 0) {
-                                travels.getJSONObject(0).optInt("travelTime", -1)
-                            } else {
-                                -1
-                            }
-                        }
-                    }
+            for (slot in AlarmConfig.getWatchSlots(ctx)) {
+                try {
+                    pollSlot(ctx, slot, timeStr)
+                } catch (e: Exception) {
+                    AlarmConfig.setWatchStatus(ctx, "[$timeStr] 查询失败：" + (e.message ?: "网络异常"), slot)
                 }
-                // 实时位置板数据：order:busId;order:busId（BoardView 据此绘制）
-                val pairs = StringBuilder()
-                if (buses != null) {
-                    for (i in 0 until buses.length()) {
-                        val b = buses.getJSONObject(i)
-                        val o = b.optInt("order", -1)
-                        if (o > 0) {
-                            if (pairs.isNotEmpty()) pairs.append(";")
-                            pairs.append(o).append(":").append(b.optString("busId", ""))
-                        }
-                    }
-                }
-                AlarmConfig.setWatchBuses(ctx, pairs.toString())
-                if (nearestOrder < 0) {
-                    AlarmConfig.setWatchStatus(
-                        ctx,
-                        "[$timeStr] 暂无开往" + AlarmConfig.getWatchStationName(ctx) + "的车（在路 $total 辆）"
-                    )
-                    return@Thread
-                }
-                val stopsAway = target - nearestOrder
-                val etaText = if (nearestTravelSec > 0) {
-                    "，约 " + Math.round(nearestTravelSec / 60.0) + " 分钟"
-                } else {
-                    ""
-                }
-                AlarmConfig.setWatchStatus(ctx, "[$timeStr] 最近一辆 $nearestBusId：还剩 $stopsAway 站$etaText")
-                val lead = AlarmConfig.getWatchLead(ctx)
-                if (stopsAway in 0..lead) {
-                    val day = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date())
-                    val marker = nearestBusId + "@" + day
-                    if (AlarmConfig.getWatchFired(ctx) != marker && !AlarmPlayer.isRinging) {
-                        AlarmConfig.setWatchFired(ctx, marker)
-                        val lineNo = AlarmConfig.getWatchLineNo(ctx)
-                        AlarmPlayer.start(ctx, lineNo + "路快到了，快出门！", lineNo + "路")
-                        AlarmConfig.setWatchStatus(ctx, "[$timeStr] 已触发提醒：$nearestBusId 还剩 $stopsAway 站")
-                    }
-                }
-            } catch (e: Exception) {
-                AlarmConfig.setWatchStatus(ctx, "[$timeStr] 查询失败：" + (e.message ?: "网络异常"))
             }
         }.start()
+    }
+
+    private fun pollSlot(ctx: Context, slot: Int, timeStr: String) {
+        val lineNo = AlarmConfig.getWatchLineNo(ctx, slot)
+        val stationName = AlarmConfig.getWatchStationName(ctx, slot)
+        val target = AlarmConfig.getWatchTargetOrder(ctx, slot)
+        val data = ChelaileApi.busDetail(
+            AlarmConfig.getWatchCityId(ctx),
+            AlarmConfig.getWatchLineId(ctx, slot),
+            target,
+            AlarmConfig.getWatchStationId(ctx, slot)
+        )
+        val buses = data.optJSONArray("buses")
+        var nearestOrder = -1
+        var nearestBusId = ""
+        var nearestTravelSec = -1
+        var total = 0
+        if (buses != null) {
+            total = buses.length()
+            for (i in 0 until buses.length()) {
+                val b = buses.getJSONObject(i)
+                if (b.optInt("distanceToWaitStn", -1) < 0) continue
+                val order = b.optInt("order", -1)
+                if (order > nearestOrder) {
+                    nearestOrder = order
+                    nearestBusId = b.optString("busId", "")
+                    val travels = b.optJSONArray("travels")
+                    nearestTravelSec = if (travels != null && travels.length() > 0) {
+                        travels.getJSONObject(0).optInt("travelTime", -1)
+                    } else {
+                        -1
+                    }
+                }
+            }
+        }
+        // 实时位置板数据：order:busId;order:busId（BoardView 据此绘制）
+        val pairs = StringBuilder()
+        if (buses != null) {
+            for (i in 0 until buses.length()) {
+                val b = buses.getJSONObject(i)
+                val o = b.optInt("order", -1)
+                if (o > 0) {
+                    if (pairs.isNotEmpty()) pairs.append(";")
+                    pairs.append(o).append(":").append(b.optString("busId", ""))
+                }
+            }
+        }
+        AlarmConfig.setWatchBuses(ctx, pairs.toString(), slot)
+        if (nearestOrder < 0) {
+            AlarmConfig.setWatchStatus(
+                ctx,
+                "[$timeStr] 暂无开往" + stationName + "的车（在路 $total 辆）",
+                slot
+            )
+            return
+        }
+        val stopsAway = target - nearestOrder
+        val etaText = if (nearestTravelSec > 0) {
+            "，约 " + Math.round(nearestTravelSec / 60.0) + " 分钟"
+        } else {
+            ""
+        }
+        AlarmConfig.setWatchStatus(ctx, "[$timeStr] 最近一辆 $nearestBusId：还剩 $stopsAway 站$etaText", slot)
+        val lead = AlarmConfig.getWatchLead(ctx, slot)
+        if (stopsAway in 0..lead) {
+            val day = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date())
+            val marker = AlarmConfig.getWatchLineId(ctx, slot) + ":" + nearestBusId + "@" + day
+            if (AlarmConfig.getWatchFired(ctx, slot) != marker && !AlarmPlayer.isRinging) {
+                AlarmConfig.setWatchFired(ctx, marker, slot)
+                val label = lineNo + "路·" + stationName
+                AlarmPlayer.start(ctx, label + "快到了，快出门！", label)
+                AlarmConfig.setWatchStatus(ctx, "[$timeStr] 已触发提醒：$nearestBusId 还剩 $stopsAway 站", slot)
+            }
+        }
     }
 
     companion object {
