@@ -1,0 +1,65 @@
+name: Build Debug APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate Android project
+        run: python3 generate.py
+
+      - name: Derive fixed signing key
+        env:
+          SIGNING_SEED: ${{ secrets.SIGNING_SEED }}
+          SIGNING_CERT_B64: ${{ secrets.SIGNING_CERT_B64 }}
+          SIGNING_OUT_DIR: ${{ runner.temp }}/signing
+        run: |
+          if [ -z "$SIGNING_SEED" ] || [ -z "$SIGNING_CERT_B64" ]; then
+            echo "::error::SIGNING_SEED / SIGNING_CERT_B64 secrets are missing; refusing to build with an ephemeral debug key"
+            exit 1
+          fi
+          python3 -m pip install --quiet "cryptography==50.0.2" || python3 -m pip install --quiet --break-system-packages "cryptography==50.0.2"
+          python3 gen_keystore.py
+          cat "$SIGNING_OUT_DIR/signing.env" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PATH=$SIGNING_OUT_DIR/cq141-fixed.p12" >> "$GITHUB_ENV"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build Debug APK
+        working-directory: CQ141BusAlarm
+        run: |
+          gradle clean assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/CQ141BusAlarm-v2.5-custom.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CQ141BusAlarm-v2.5-custom
+          path: CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v2.5-custom.apk
+          if-no-files-found: error
+
+      - name: Publish Release with Direct APK Link
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete v2.5 --yes || true
+          gh release create v2.5 CQ141BusAlarm/app/build/outputs/apk/debug/CQ141BusAlarm-v2.5-custom.apk --title "公交强提醒 v2.5（界面重排）" --notes "v2.5：主界面重排，分三块卡片，盯车在最上面，通知监听和设置收在下面。含 v2.4.1 全部功能。固定签名，直接覆盖安装即可。"
