@@ -9,6 +9,7 @@ FILES = {
 - 自查盯车（v2.0 起）：软件自己直查车来了实时数据，每 30 秒查一次，车到站前强提醒；v2.3 起可同时盯 2 个目标（两条线路、两个站），各报各的。
 - 应用内更新（v2.4 起）：打开应用自动检查 GitHub 新版，有更新就下载安装包并调用系统安装，不用再手动下载。
 - 更新检查备用通道（v2.4.1 起）：api.github.com 在国内经常连不上或被限流，检查失败时自动改走 github.com 网页重定向拿最新版本。
+- 界面重排（v2.5）：主界面分三块卡片，盯车在最上面，通知监听和设置收在下面，常用操作一眼能找到。
 - 监听指定公交软件（高德地图、车来了、百度地图）的通知栏消息，作为备用提醒通道。
 - 全天不限时生效，支持在 App 主界面自由输入任意线路号（多条用逗号或空格隔开，例如 `141, 465`）。
 - 检测到包含目标线路号的通知时，自动拉满系统闹钟音量、连续语音播报、循环震动并亮屏全屏弹窗。
@@ -65,8 +66,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "2.4.1"
+        versionCode = 17
+        versionName = "2.5"
     }
 
     signingConfigs {
@@ -496,6 +497,7 @@ import android.content.IntentFilter
 import android.graphics.drawable.GradientDrawable
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -553,10 +555,10 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "🚌 公交强提醒助手（v2.4.1）\\n双目标自查盯车 + 通知监听双保险 + 应用内更新"
+            text = "🚌 公交强提醒助手（v2.5）\\n双目标自查盯车 + 通知监听双保险 + 应用内更新"
             textSize = 18f
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 32)
+            setPadding(0, 0, 0, 8)
         }
 
         updateStatusView = TextView(this).apply {
@@ -616,6 +618,7 @@ class MainActivity : Activity() {
 
         val btnNotifyListener = Button(this).apply {
             text = "1. 开启“通知读取权限”"
+            textSize = 14f
             setOnClickListener {
                 startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             }
@@ -623,6 +626,7 @@ class MainActivity : Activity() {
 
         val btnFullScreenPerm = Button(this).apply {
             text = "2. 开启全屏闹钟弹窗权限"
+            textSize = 14f
             setOnClickListener {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
@@ -637,6 +641,7 @@ class MainActivity : Activity() {
 
         val btnTest = Button(this).apply {
             text = "3. 5秒后测试（点完请立即锁屏）"
+            textSize = 14f
             setOnClickListener {
                 testRunnable?.let { handler.removeCallbacks(it) }
 
@@ -659,6 +664,7 @@ class MainActivity : Activity() {
 
         val btnStop = Button(this).apply {
             text = "4. 我出门了（停止响铃 / 取消测试）"
+            textSize = 14f
             setOnClickListener {
                 testRunnable?.let { handler.removeCallbacks(it) }
                 btnTest.isEnabled = true
@@ -670,7 +676,7 @@ class MainActivity : Activity() {
         statusView = TextView(this).apply {
             textSize = 13f
             setTextColor(Color.DKGRAY)
-            setPadding(0, 32, 0, 4)
+            setPadding(0, 16, 0, 4)
         }
 
         logView = TextView(this).apply {
@@ -680,23 +686,24 @@ class MainActivity : Activity() {
         }
 
         layout.addView(info)
-        layout.addView(updateStatusView)
-        layout.addView(btnCheckUpdate)
-        layout.addView(routeLabel)
-        layout.addView(routeInput)
-        layout.addView(btnSaveRoutes)
-        layout.addView(anyRouteSwitch)
-        layout.addView(btnNotifyListener)
-        layout.addView(btnFullScreenPerm)
-        layout.addView(btnTest)
-        layout.addView(btnStop)
+        val updateRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        updateRow.addView(updateStatusView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        updateRow.addView(btnCheckUpdate)
+        layout.addView(updateRow)
 
         // ===== v2.3 双目标自查盯车 =====
         val watchTitle = TextView(this).apply {
             text = "盯车目标 1"
             textSize = 16f
             setTextColor(Color.BLACK)
-            setPadding(0, 40, 0, 8)
+            setPadding(0, 8, 0, 8)
         }
 
         lineInput = EditText(this).apply {
@@ -807,26 +814,75 @@ class MainActivity : Activity() {
 
         boardView = BoardView(this)
 
-        layout.addView(watchTitle)
-        layout.addView(lineInput)
-        layout.addView(btnStation)
-        layout.addView(btnDirection)
-        layout.addView(makeLeadRow(1))
-        layout.addView(watchTitle2)
-        layout.addView(lineInput2)
-        layout.addView(btnStation2)
-        layout.addView(btnDirection2)
-        layout.addView(makeLeadRow(2))
-        layout.addView(btnClearSlot2)
-        layout.addView(switchWatch)
-        layout.addView(watchStatusView)
-        layout.addView(btnBoardSwitch)
-        layout.addView(boardView)
-        layout.addView(statusView)
-        layout.addView(logView)
+        val watchCard = makeCard()
+        watchCard.addView(makeSectionTitle("🚌 自查盯车"))
+        watchCard.addView(watchTitle)
+        watchCard.addView(lineInput)
+        watchCard.addView(btnStation)
+        watchCard.addView(btnDirection)
+        watchCard.addView(makeLeadRow(1))
+        watchCard.addView(watchTitle2)
+        watchCard.addView(lineInput2)
+        watchCard.addView(btnStation2)
+        watchCard.addView(btnDirection2)
+        watchCard.addView(makeLeadRow(2))
+        watchCard.addView(btnClearSlot2)
+        watchCard.addView(switchWatch)
+        watchCard.addView(watchStatusView)
+        watchCard.addView(btnBoardSwitch)
+        watchCard.addView(boardView)
+
+        val listenCard = makeCard()
+        listenCard.addView(makeSectionTitle("🔔 通知监听（备用通道）"))
+        listenCard.addView(routeLabel)
+        listenCard.addView(routeInput)
+        listenCard.addView(btnSaveRoutes)
+        listenCard.addView(anyRouteSwitch)
+        listenCard.addView(statusView)
+        listenCard.addView(logView)
+
+        val setupCard = makeCard()
+        setupCard.addView(makeSectionTitle("⚙️ 设置"))
+        setupCard.addView(btnNotifyListener)
+        setupCard.addView(btnFullScreenPerm)
+        setupCard.addView(btnTest)
+        setupCard.addView(btnStop)
+
+        layout.addView(watchCard)
+        layout.addView(listenCard)
+        layout.addView(setupCard)
         scroll.addView(layout)
         setContentView(scroll)
         checkForUpdate(manual = false)
+    }
+
+    // ===== v2.5 界面重排：圆角白卡片 + 分区标题 =====
+    private fun makeCard(): LinearLayout {
+        val bg = GradientDrawable().apply {
+            setColor(Color.WHITE)
+            cornerRadius = 32f
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = bg
+            setPadding(36, 28, 36, 28)
+            val params = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.setMargins(0, 0, 0, 28)
+            layoutParams = params
+        }
+    }
+
+    private fun makeSectionTitle(text: String): TextView {
+        return TextView(this).apply {
+            this.text = text
+            textSize = 17f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.BLACK)
+            setPadding(0, 0, 0, 16)
+        }
     }
 
     private fun makeLeadRow(slot: Int): LinearLayout {
@@ -1561,13 +1617,13 @@ object UpdateChecker {
         val apkName: String
     )
 
-    /** 当前版本号，如 "2.4.1" */
+    /** 当前版本号，如 "2.5" */
     fun currentVersion(context: Context): String {
         return try {
             val info = context.packageManager.getPackageInfo(context.packageName, 0)
-            info.versionName ?: "2.4.1"
+            info.versionName ?: "2.5"
         } catch (e: Exception) {
-            "2.4.1"
+            "2.5"
         }
     }
 
