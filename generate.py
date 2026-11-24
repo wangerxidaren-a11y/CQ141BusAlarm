@@ -7,6 +7,7 @@ FILES = {
 
 ## 功能说明
 - 自查盯车（v2.0 起）：软件自己直查车来了实时数据，每 30 秒查一次，车到站前强提醒；v2.3 起可同时盯 2 个目标（两条线路、两个站），各报各的。
+- 应用内更新（v2.4 起）：打开应用自动检查 GitHub 新版，有更新就下载安装包并调用系统安装，不用再手动下载。
 - 监听指定公交软件（高德地图、车来了、百度地图）的通知栏消息，作为备用提醒通道。
 - 全天不限时生效，支持在 App 主界面自由输入任意线路号（多条用逗号或空格隔开，例如 `141, 465`）。
 - 检测到包含目标线路号的通知时，自动拉满系统闹钟音量、连续语音播报、循环震动并亮屏全屏弹窗。
@@ -63,8 +64,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 14
-        versionName = "2.3"
+        versionCode = 15
+        versionName = "2.4"
     }
 
     signingConfigs {
@@ -128,6 +129,7 @@ dependencies {
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
@@ -468,6 +470,16 @@ object AlarmConfig {
     fun setWatchFired(context: Context, marker: String, slot: Int = 1) {
         wprefs(context).edit().putString(skey(KEY_WATCH_FIRED, slot), marker).apply()
     }
+
+    // ===== v2.4 应用内更新：上次自动检查时间（手动检查不受限制） =====
+    private const val KEY_LAST_UPDATE_CHECK = "last_update_check"
+
+    fun getLastUpdateCheck(context: Context): Long =
+        wprefs(context).getLong(KEY_LAST_UPDATE_CHECK, 0L)
+
+    fun setLastUpdateCheck(context: Context, time: Long) {
+        wprefs(context).edit().putLong(KEY_LAST_UPDATE_CHECK, time).apply()
+    }
 }
 """,
     "app/src/main/java/com/erxi/cq141alarm/MainActivity.kt": """package com.erxi.cq141alarm
@@ -475,7 +487,11 @@ object AlarmConfig {
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.drawable.GradientDrawable
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -517,6 +533,10 @@ class MainActivity : Activity() {
         }
     }
     private lateinit var switchWatch: Switch
+    private lateinit var updateStatusView: TextView
+    private var pendingApkUri: Uri? = null
+    private var updateDownloadId: Long = -1L
+    private var downloadReceiver: BroadcastReceiver? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -532,10 +552,23 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "🚌 公交强提醒助手（v2.3）\\n双目标自查盯车 + 通知监听双保险"
+            text = "🚌 公交强提醒助手（v2.4）\\n双目标自查盯车 + 通知监听双保险 + 应用内更新"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
+        }
+
+        updateStatusView = TextView(this).apply {
+            text = "当前版本：v" + UpdateChecker.currentVersion(this@MainActivity)
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(Color.DKGRAY)
+            setPadding(0, 0, 0, 8)
+        }
+
+        val btnCheckUpdate = Button(this).apply {
+            text = "检查更新"
+            setOnClickListener { checkForUpdate(manual = true) }
         }
 
         val routeLabel = TextView(this).apply {
@@ -646,6 +679,8 @@ class MainActivity : Activity() {
         }
 
         layout.addView(info)
+        layout.addView(updateStatusView)
+        layout.addView(btnCheckUpdate)
         layout.addView(routeLabel)
         layout.addView(routeInput)
         layout.addView(btnSaveRoutes)
@@ -790,6 +825,7 @@ class MainActivity : Activity() {
         layout.addView(logView)
         scroll.addView(layout)
         setContentView(scroll)
+        checkForUpdate(manual = false)
     }
 
     private fun makeLeadRow(slot: Int): LinearLayout {
@@ -943,6 +979,11 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        val pending = pendingApkUri
+        if (pending != null && packageManager.canRequestPackageInstalls()) {
+            pendingApkUri = null
+            tryInstallApk(pending)
+        }
         statusView.text = "监听状态：${AlarmConfig.getListenerStatus(this)}"
         logView.text = "最近捕获的通知：\\n${AlarmConfig.getLastLog(this)}"
         refreshWatchTexts()
@@ -963,9 +1004,109 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun checkForUpdate(manual: Boolean) {
+        if (!manual) {
+            val last = AlarmConfig.getLastUpdateCheck(this)
+            if (System.currentTimeMillis() - last < 24 * 60 * 60 * 1000L) return
+        }
+        if (manual) updateStatusView.text = "正在检查更新…"
+        Thread {
+            try {
+                val latest = UpdateChecker.checkLatest()
+                AlarmConfig.setLastUpdateCheck(this, System.currentTimeMillis())
+                val current = UpdateChecker.currentVersion(this)
+                runOnUiThread {
+                    if (latest == null) {
+                        if (manual) {
+                            updateStatusView.text = "检查更新失败，请稍后再试"
+                            Toast.makeText(this, "检查更新失败，请稍后再试", Toast.LENGTH_SHORT).show()
+                        }
+                    } else if (UpdateChecker.isNewer(current, latest.versionName)) {
+                        updateStatusView.text = "发现新版本：v" + latest.versionName + "（当前 v" + current + "）"
+                        AlertDialog.Builder(this)
+                            .setTitle("发现新版本 v" + latest.versionName)
+                            .setMessage(if (latest.notes.isBlank()) "有新版本可用，是否立即更新？" else latest.notes)
+                            .setPositiveButton("立即更新") { _, _ -> startUpdateDownload(latest) }
+                            .setNegativeButton("稍后", null)
+                            .show()
+                    } else if (manual) {
+                        updateStatusView.text = "当前已是最新版本：v" + current
+                        Toast.makeText(this, "已经是最新版本", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (manual) {
+                        updateStatusView.text = "检查更新失败，请稍后再试"
+                        Toast.makeText(this, "检查更新失败：" + (e.message ?: "网络错误"), Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }.start()
+    }
+
+    private fun startUpdateDownload(info: UpdateChecker.UpdateInfo) {
+        updateStatusView.text = "正在下载 v" + info.versionName + " 安装包…"
+        try {
+            updateDownloadId = UpdateChecker.enqueueDownload(this, info)
+        } catch (e: Exception) {
+            updateStatusView.text = "下载失败，请稍后再试"
+            Toast.makeText(this, "下载失败：" + (e.message ?: "未知错误"), Toast.LENGTH_LONG).show()
+            return
+        }
+        if (downloadReceiver == null) {
+            downloadReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: -1L
+                    if (id != updateDownloadId) return
+                    val uri = UpdateChecker.downloadedFileUri(this@MainActivity, id)
+                    if (uri == null) {
+                        updateStatusView.text = "下载失败，请重试"
+                        Toast.makeText(this@MainActivity, "安装包下载失败，请重试", Toast.LENGTH_LONG).show()
+                        return
+                    }
+                    updateStatusView.text = "下载完成，正在打开安装界面…"
+                    tryInstallApk(uri)
+                }
+            }
+            registerReceiver(
+                downloadReceiver,
+                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+                Context.RECEIVER_EXPORTED
+            )
+        }
+    }
+
+    private fun tryInstallApk(uri: Uri) {
+        if (!packageManager.canRequestPackageInstalls()) {
+            pendingApkUri = uri
+            updateStatusView.text = "安装包已下载，开启安装权限后自动继续"
+            AlertDialog.Builder(this)
+                .setTitle("需要开启安装权限")
+                .setMessage("首次更新需要允许本应用安装未知应用。点“去开启”，在设置里打开开关后返回这里，会自动继续安装。")
+                .setPositiveButton("去开启") { _, _ ->
+                    val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                }
+                .setNegativeButton("取消", null)
+                .show()
+            return
+        }
+        pendingApkUri = null
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         testRunnable?.let { handler.removeCallbacks(it) }
+        downloadReceiver?.let { unregisterReceiver(it) }
     }
 }
 """,
@@ -1385,6 +1526,113 @@ object ChelaileApi {
                 "userId" to "", "h5Id" to "", "unionId" to "", "accountId" to "", "secret" to ""
             )
         )
+}
+""",
+    "app/src/main/java/com/erxi/cq141alarm/UpdateChecker.kt": """package com.erxi.cq141alarm
+
+import android.app.DownloadManager
+import android.content.Context
+import android.net.Uri
+import android.os.Environment
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+
+/**
+ * v2.4 应用内更新：检查 GitHub 最新 Release，有新版就下载 APK 并调用系统安装。
+ * 零第三方依赖；下载走系统 DownloadManager，安装用 DownloadManager 返回的 content Uri，
+ * 不需要 FileProvider（本工程未引入 AndroidX）。
+ */
+object UpdateChecker {
+
+    private const val LATEST_URL =
+        "https://api.github.com/repos/wangerxidaren-a11y/CQ141BusAlarm/releases/latest"
+    private const val UA = "CQ141BusAlarm"
+
+    data class UpdateInfo(
+        val versionName: String,
+        val notes: String,
+        val apkUrl: String,
+        val apkName: String
+    )
+
+    /** 当前版本号，如 "2.4" */
+    fun currentVersion(context: Context): String {
+        return try {
+            val info = context.packageManager.getPackageInfo(context.packageName, 0)
+            info.versionName ?: "2.4"
+        } catch (e: Exception) {
+            "2.4"
+        }
+    }
+
+    /** 比较版本号：latest 比 current 新返回 true */
+    fun isNewer(current: String, latest: String): Boolean {
+        val cur = current.trim().removePrefix("v").split(".")
+        val lat = latest.trim().removePrefix("v").split(".")
+        val n = maxOf(cur.size, lat.size)
+        for (i in 0 until n) {
+            val c = cur.getOrNull(i)?.toIntOrNull() ?: 0
+            val l = lat.getOrNull(i)?.toIntOrNull() ?: 0
+            if (l != c) return l > c
+        }
+        return false
+    }
+
+    /** 查 GitHub 最新 Release；失败或无 APK 附件时返回 null */
+    fun checkLatest(): UpdateInfo? {
+        val conn = URL(LATEST_URL).openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 15000
+            conn.readTimeout = 15000
+            conn.setRequestProperty("User-Agent", UA)
+            conn.setRequestProperty("Accept", "application/vnd.github+json")
+            if (conn.responseCode != HttpURLConnection.HTTP_OK) return null
+            val raw = conn.inputStream.bufferedReader(Charsets.UTF_8).readText()
+            val json = JSONObject(raw)
+            val tag = json.optString("tag_name", "").removePrefix("v")
+            if (tag.isEmpty()) return null
+            val notes = json.optString("body", "")
+            val assets = json.optJSONArray("assets") ?: return null
+            for (i in 0 until assets.length()) {
+                val asset = assets.getJSONObject(i)
+                val name = asset.optString("name", "")
+                if (name.endsWith(".apk")) {
+                    val url = asset.optString("browser_download_url", "")
+                    if (url.isNotEmpty()) return UpdateInfo(tag, notes, url, name)
+                }
+            }
+            return null
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** 用 DownloadManager 下载 APK，返回下载任务 id */
+    fun enqueueDownload(context: Context, info: UpdateInfo): Long {
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val request = DownloadManager.Request(Uri.parse(info.apkUrl))
+            .setTitle("公交强提醒 v" + info.versionName + " 更新")
+            .setDescription("正在下载安装包…")
+            .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, info.apkName)
+            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            .setAllowedOverMetered(true)
+            .setAllowedOverRoaming(true)
+        return dm.enqueue(request)
+    }
+
+    /** 下载完成后的 APK content Uri；未完成或失败返回 null */
+    fun downloadedFileUri(context: Context, downloadId: Long): Uri? {
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val cursor = dm.query(DownloadManager.Query().setFilterById(downloadId))
+        cursor.use {
+            if (!it.moveToFirst()) return null
+            val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+            if (status != DownloadManager.STATUS_SUCCESSFUL) return null
+        }
+        return dm.getUriForDownloadedFile(downloadId)
+    }
 }
 """,
     "app/src/main/java/com/erxi/cq141alarm/BoardView.kt": """package com.erxi.cq141alarm
