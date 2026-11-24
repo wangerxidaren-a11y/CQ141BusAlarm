@@ -8,6 +8,7 @@ FILES = {
 ## 功能说明
 - 自查盯车（v2.0 起）：软件自己直查车来了实时数据，每 30 秒查一次，车到站前强提醒；v2.3 起可同时盯 2 个目标（两条线路、两个站），各报各的。
 - 应用内更新（v2.4 起）：打开应用自动检查 GitHub 新版，有更新就下载安装包并调用系统安装，不用再手动下载。
+- 更新检查备用通道（v2.4.1 起）：api.github.com 在国内经常连不上或被限流，检查失败时自动改走 github.com 网页重定向拿最新版本。
 - 监听指定公交软件（高德地图、车来了、百度地图）的通知栏消息，作为备用提醒通道。
 - 全天不限时生效，支持在 App 主界面自由输入任意线路号（多条用逗号或空格隔开，例如 `141, 465`）。
 - 检测到包含目标线路号的通知时，自动拉满系统闹钟音量、连续语音播报、循环震动并亮屏全屏弹窗。
@@ -64,8 +65,8 @@ android {
         applicationId = "com.erxi.cq141alarm"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "2.4"
+        versionCode = 16
+        versionName = "2.4.1"
     }
 
     signingConfigs {
@@ -552,7 +553,7 @@ class MainActivity : Activity() {
         }
 
         val info = TextView(this).apply {
-            text = "🚌 公交强提醒助手（v2.4）\\n双目标自查盯车 + 通知监听双保险 + 应用内更新"
+            text = "🚌 公交强提醒助手（v2.4.1）\\n双目标自查盯车 + 通知监听双保险 + 应用内更新"
             textSize = 18f
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 32)
@@ -1542,11 +1543,15 @@ import java.net.URL
  * v2.4 应用内更新：检查 GitHub 最新 Release，有新版就下载 APK 并调用系统安装。
  * 零第三方依赖；下载走系统 DownloadManager，安装用 DownloadManager 返回的 content Uri，
  * 不需要 FileProvider（本工程未引入 AndroidX）。
+ * v2.4.1：API 不通（国内经常连不上 api.github.com 或被限流）时，自动改走
+ * github.com/releases/latest 网页重定向拿最新 tag，安装包地址按固定规则拼出来。
  */
 object UpdateChecker {
 
     private const val LATEST_URL =
         "https://api.github.com/repos/wangerxidaren-a11y/CQ141BusAlarm/releases/latest"
+    private const val LATEST_PAGE_URL =
+        "https://github.com/wangerxidaren-a11y/CQ141BusAlarm/releases/latest"
     private const val UA = "CQ141BusAlarm"
 
     data class UpdateInfo(
@@ -1556,13 +1561,13 @@ object UpdateChecker {
         val apkName: String
     )
 
-    /** 当前版本号，如 "2.4" */
+    /** 当前版本号，如 "2.4.1" */
     fun currentVersion(context: Context): String {
         return try {
             val info = context.packageManager.getPackageInfo(context.packageName, 0)
-            info.versionName ?: "2.4"
+            info.versionName ?: "2.4.1"
         } catch (e: Exception) {
-            "2.4"
+            "2.4.1"
         }
     }
 
@@ -1579,8 +1584,22 @@ object UpdateChecker {
         return false
     }
 
-    /** 查 GitHub 最新 Release；失败或无 APK 附件时返回 null */
+    /** 查最新 Release：先走 API，不通再走网页重定向；都失败返回 null */
     fun checkLatest(): UpdateInfo? {
+        try {
+            checkLatestViaApi()?.let { return it }
+        } catch (e: Exception) {
+            // API 不通，改走备用
+        }
+        return try {
+            checkLatestViaRedirect()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** 主路：GitHub API，可拿到更新说明和安装包直链；失败或无 APK 附件时返回 null */
+    private fun checkLatestViaApi(): UpdateInfo? {
         val conn = URL(LATEST_URL).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "GET"
@@ -1604,6 +1623,33 @@ object UpdateChecker {
                 }
             }
             return null
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** 备用：不走 API，读 github.com/releases/latest 的 302 重定向拿最新 tag，
+     * 安装包地址按固定规则拼：releases/download/<tag>/CQ141BusAlarm-<版本>-custom.apk */
+    private fun checkLatestViaRedirect(): UpdateInfo? {
+        val conn = URL(LATEST_PAGE_URL).openConnection() as HttpURLConnection
+        try {
+            conn.instanceFollowRedirects = false
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 15000
+            conn.readTimeout = 15000
+            conn.setRequestProperty("User-Agent", UA)
+            val code = conn.responseCode
+            if (code != HttpURLConnection.HTTP_MOVED_TEMP &&
+                code != HttpURLConnection.HTTP_MOVED_PERM &&
+                code != HttpURLConnection.HTTP_SEE_OTHER) return null
+            val location = conn.getHeaderField("Location") ?: return null
+            val tag = location.substringAfterLast("/releases/tag/", "")
+            if (tag.isEmpty()) return null
+            val version = tag.removePrefix("v")
+            val apkName = "CQ141BusAlarm-" + version + "-custom.apk"
+            val apkUrl = "https://github.com/wangerxidaren-a11y/CQ141BusAlarm/releases/download/" +
+                tag + "/" + apkName
+            return UpdateInfo(version, "", apkUrl, apkName)
         } finally {
             conn.disconnect()
         }
